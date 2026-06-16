@@ -1,0 +1,23 @@
+# Environment
+.env
+venv/
+
+# Generated data files
+child_chunks.json
+parent_chunks.json
+parent_lookup.json
+parsed_manual.json
+parsed_object_reference.json
+chroma_db/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Source HTML data (large, re-downloadable)
+manual/
+object_reference/
