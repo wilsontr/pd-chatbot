@@ -68,7 +68,10 @@ export default function App() {
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': import.meta.env.VITE_CHAT_API_KEY ?? '',
+        },
         body: JSON.stringify({ message: question, history }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)

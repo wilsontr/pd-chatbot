@@ -3,12 +3,11 @@ import json
 import chromadb
 from dotenv import load_dotenv
 load_dotenv()
-from sentence_transformers import SentenceTransformer, CrossEncoder
+import voyageai
 from rank_bm25 import BM25Okapi
 import anthropic
 
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+vc = voyageai.Client()
 db = chromadb.PersistentClient(path="./chroma_db")
 collection = db.get_collection("pd_docs")
 llm = anthropic.Anthropic()
@@ -67,7 +66,7 @@ Return only the JSON object, no other text."""
 
 def vector_search(query, top_k=10, content_type=None, object_name=None):
     """Search ChromaDB with optional metadata filters."""
-    query_vector = embedder.encode([query])[0].tolist()
+    query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
 
     where = {}
     if content_type:
@@ -100,7 +99,7 @@ def bm25_search(query, top_k=10, content_type=None):
 
 def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_query=None):
     """
-    Combine vector search and BM25, then rerank.
+    Combine vector search and BM25 via RRF, return top-k by rank.
     If specific object names are mentioned, also do exact lookups.
     bm25_query defaults to query but can be set to the original user question
     to preserve exact object name tokens (e.g. osc~) that a rewritten query may drop.
@@ -160,11 +159,7 @@ def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_q
     if not candidates:
         return []
 
-    # Rerank — let CrossEncoder's tokenizer handle length truncation
-    pairs = [(query, c["text"]) for c in candidates]
-    scores = reranker.predict(pairs)
-    ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
-    return [c for _, c in ranked[:top_k]]
+    return candidates[:top_k]
 
 
 def retrieve(question, history=None):
@@ -229,8 +224,10 @@ def generate_response(question, context_chunks, history=None):
     system_prompt = (
         "You are a helpful assistant that answers questions about Pure Data (Pd), "
         "a visual programming language for music and multimedia. "
-        "Answer based on the provided documentation excerpts. "
-        "If the documentation doesn't contain enough information to answer fully, say so. "
+        "Use the provided documentation excerpts as your primary source. "
+        "You may draw on broader knowledge of Pd to explain concepts or suggest implementation "
+        "strategies, but ground your answer in the documentation where it is relevant. "
+        "If the documentation contradicts general knowledge, prefer the documentation. "
         "Include relevant object names and brief examples where helpful. "
         "Cite the source URLs at the end of your answer."
     )
@@ -254,6 +251,14 @@ def chat(question, history=None):
     if history is None:
         history = []
     context_chunks, classification = retrieve(question, history)
+    if not context_chunks:
+        return (
+            "I couldn't find any relevant Pure Data documentation for that question. "
+            "Try asking about a specific Pd object, patching concept, or audio technique.",
+            [],
+            classification,
+            history,
+        )
     answer = generate_response(question, context_chunks, history)
     new_history = history + [
         {"role": "user", "content": question},
