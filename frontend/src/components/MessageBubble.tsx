@@ -54,7 +54,13 @@ export function MessageBubble({ message }: { message: Message }) {
             ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
             : 'bg-muted text-foreground prose-bubble'
         }`}>
-          {isUser ? message.content : (
+          {isUser ? message.content : message.content === '' ? (
+            <span className="inline-flex gap-1 text-muted-foreground">
+              <span className="animate-bounce [animation-delay:0ms]">.</span>
+              <span className="animate-bounce [animation-delay:150ms]">.</span>
+              <span className="animate-bounce [animation-delay:300ms]">.</span>
+            </span>
+          ) : (
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
               {message.content}
             </ReactMarkdown>
