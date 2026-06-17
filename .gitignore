@@ -4,7 +4,6 @@
 venv/
 
 # Generated data files — rebuild artifacts (not needed at runtime)
-parent_chunks.json
 parsed_manual.json
 parsed_object_reference.json
 parsed_book.json
