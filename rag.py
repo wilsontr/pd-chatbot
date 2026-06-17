@@ -18,11 +18,46 @@ logger = logging.getLogger(__name__)
 _response_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=3600)
 _cache_lock = threading.Lock()
 
+HISTORY_COMPRESS_AFTER = 8  # items (4 turns); older turns are summarized
+
 def _make_cache_key(question: str) -> str:
     # Key on the normalized question only, not history. Documentation answers are
     # objective — the same question asked mid-session should return the cached answer
     # rather than paying full retrieval + LLM cost again.
     return hashlib.sha256(question.strip().lower().encode()).hexdigest()
+
+
+def _compress_history(history: list) -> list:
+    """Summarize turns older than HISTORY_COMPRESS_AFTER items using Haiku."""
+    if len(history) <= HISTORY_COMPRESS_AFTER:
+        return history
+
+    recent = history[-HISTORY_COMPRESS_AFTER:]
+    old = history[:-HISTORY_COMPRESS_AFTER]
+
+    old_text = "\n".join(
+        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content'][:400]}"
+        for m in old
+    )
+    with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
+        resp = llm.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Summarize this Pure Data chatbot conversation in 2-3 sentences, "
+                    "capturing key topics and important context:\n\n" + old_text
+                )
+            }]
+        )
+    summary = resp.content[0].text.strip()
+    logger.info("compressed %d history items into summary", len(old))
+
+    return [
+        {"role": "user", "content": f"[Conversation summary: {summary}]"},
+        {"role": "assistant", "content": "Understood."},
+    ] + recent
 
 vc = voyageai.Client()
 db = chromadb.PersistentClient(path="./chroma_db")
@@ -84,10 +119,11 @@ Return only the JSON object, no other text."""
         }
 
 
-def vector_search(query, top_k=10, content_type=None, object_name=None):
+def vector_search(query, top_k=10, content_type=None, object_name=None, query_vector=None):
     """Search ChromaDB with optional metadata filters."""
-    with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
-        query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
+    if query_vector is None:
+        with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
+            query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
 
     where = {}
     if content_type:
@@ -118,12 +154,13 @@ def bm25_search(query, top_k=10, content_type=None):
     return [child_chunks[i]["id"] for i in top_indices]
 
 
-def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_query=None):
+def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_query=None, query_vector=None):
     """
     Combine vector search and BM25 via RRF, return top-k by rank.
     If specific object names are mentioned, also do exact lookups.
     bm25_query defaults to query but can be set to the original user question
     to preserve exact object name tokens (e.g. osc~) that a rewritten query may drop.
+    query_vector may be passed in from retrieve() to avoid redundant Voyage AI calls.
     """
     if bm25_query is None:
         bm25_query = query
@@ -135,7 +172,8 @@ def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_q
             exact_ids, exact_metas = vector_search(
                 query, top_k=1,
                 content_type="object_reference",
-                object_name=name
+                object_name=name,
+                query_vector=query_vector,
             )
             for id_, meta in zip(exact_ids, exact_metas):
                 parent = parent_lookup.get(meta["parent_id"])
@@ -143,7 +181,7 @@ def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_q
                     exact_results.append(parent)
 
     # Broad vector + BM25 search
-    v_ids, v_metas = vector_search(query, top_k=top_k * 2, content_type=content_type)
+    v_ids, v_metas = vector_search(query, top_k=top_k * 2, content_type=content_type, query_vector=query_vector)
     k_ids = bm25_search(bm25_query, top_k=top_k * 2, content_type=content_type)
 
     # Reciprocal rank fusion
@@ -193,19 +231,25 @@ def retrieve(question, history=None):
     query_type = classification["query_type"]
     object_names = classification.get("object_names", [])
 
+    # Compute query embedding once; reused across all vector_search calls below.
+    with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
+        query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
+
     if query_type == "object_reference":
         return hybrid_retrieve(
             query,
             content_type="object_reference",
             object_names=object_names,
-            bm25_query=question
+            bm25_query=question,
+            query_vector=query_vector,
         ), classification
 
     elif query_type == "conceptual":
         return hybrid_retrieve(
             query,
             content_type="conceptual",
-            bm25_query=question
+            bm25_query=question,
+            query_vector=query_vector,
         ), classification
 
     else:  # "both"
@@ -214,13 +258,15 @@ def retrieve(question, history=None):
             top_k=3,
             content_type="object_reference",
             object_names=object_names,
-            bm25_query=question
+            bm25_query=question,
+            query_vector=query_vector,
         )
         conceptual_results = hybrid_retrieve(
             query,
             top_k=3,
             content_type="conceptual",
-            bm25_query=question
+            bm25_query=question,
+            query_vector=query_vector,
         )
         return obj_results + conceptual_results, classification
 
@@ -268,12 +314,21 @@ def _build_chat_messages(question, context_chunks, history):
         "with columns Object and Role, or a numbered list — never multiple objects separated by | on one line."
     )
 
+    # Wrap system prompt in a cache_control block so Anthropic caches it across calls.
+    # The prompt text is identical on every request, so this is always a cache hit
+    # after the first call — charged at 10% of normal input token cost.
+    system_block = [{
+        "type": "text",
+        "text": system_prompt,
+        "cache_control": {"type": "ephemeral"},
+    }]
+
     messages = list(history) + [{
         "role": "user",
         "content": f"Documentation excerpts:\n\n{context_str}\n\n---\n\nQuestion: {question}"
     }]
 
-    return system_prompt, messages
+    return system_block, messages
 
 
 def _chunks_to_sources(chunks):
@@ -293,11 +348,11 @@ def generate_response(question, context_chunks, history=None):
     """Generate a response using Claude with retrieved context."""
     if history is None:
         history = []
-    system_prompt, messages = _build_chat_messages(question, context_chunks, history)
+    system_block, messages = _build_chat_messages(question, context_chunks, history)
     response = llm.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=4096,
-        system=system_prompt,
+        system=system_block,
         messages=messages
     )
     return response.content[0].text
@@ -306,12 +361,12 @@ def generate_response(question, context_chunks, history=None):
 @newrelic.agent.function_trace()
 async def _async_generate_response_stream(question, context_chunks, history):
     """Async generator that yields text chunks from the Claude streaming API."""
-    system_prompt, messages = _build_chat_messages(question, context_chunks, history)
+    system_block, messages = _build_chat_messages(question, context_chunks, history)
     with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
         async with async_llm.messages.stream(
             model="claude-sonnet-4-6",
             max_tokens=4096,
-            system=system_prompt,
+            system=system_block,
             messages=messages,
         ) as stream:
             async for text in stream.text_stream:
@@ -322,6 +377,8 @@ async def async_stream_chat(question, history=None):
     """Async generator entry point for SSE streaming. Yields event dicts."""
     if history is None:
         history = []
+
+    history = await asyncio.to_thread(_compress_history, history)
 
     key = _make_cache_key(question)
     with _cache_lock:
@@ -391,6 +448,8 @@ def chat(question, history=None):
     """Single-turn entry point used by the API. Returns (answer, chunks, classification, new_history)."""
     if history is None:
         history = []
+
+    history = _compress_history(history)
 
     key = _make_cache_key(question)
     with _cache_lock:
