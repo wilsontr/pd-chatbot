@@ -3,7 +3,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import threading
+from typing import Any
 import newrelic.agent
 import chromadb
 import cachetools
@@ -15,10 +17,61 @@ import anthropic
 
 logger = logging.getLogger(__name__)
 
+# Type aliases for the dict shapes that flow through the pipeline
+HistoryItem = dict[str, str]   # {"role": "user"|"assistant", "content": str}
+Chunk = dict[str, Any]         # parent chunk from parent_lookup
+
 _response_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=3600)
 _cache_lock = threading.Lock()
 
-HISTORY_COMPRESS_AFTER = 8  # items (4 turns); older turns are summarized
+HISTORY_COMPRESS_AFTER = 8   # items (4 turns); older turns are summarized
+HISTORY_MAX_OUTGOING = 18    # cap returned history so the next request passes Pydantic max_length=20
+
+# --- Clients and indexes (initialized once at startup) ---
+vc = voyageai.Client()
+db = chromadb.PersistentClient(path="./chroma_db")
+collection = db.get_collection("pd_docs")
+llm = anthropic.Anthropic()
+async_llm = anthropic.AsyncAnthropic()
+
+with open("child_chunks.json") as f:
+    child_chunks: list[Chunk] = json.load(f)
+with open("parent_lookup.json") as f:
+    parent_lookup: dict[str, Chunk] = json.load(f)
+
+# Build BM25 index over all child chunks for keyword search
+tokenized_corpus = [c["text"].lower().split() for c in child_chunks]
+bm25 = BM25Okapi(tokenized_corpus)
+
+# --- System prompt (module-level constant; edit here to tune LLM behaviour) ---
+SYSTEM_PROMPT = (
+    "You are a helpful assistant that answers questions about Pure Data (Pd), "
+    "a visual programming language for music and multimedia. "
+    "Use the provided documentation excerpts as your primary source. "
+    "You may draw on broader knowledge of Pd to explain concepts or suggest implementation "
+    "strategies, but ground your answer in the documentation where it is relevant. "
+    "If the documentation contradicts general knowledge, prefer the documentation. "
+    "Include relevant object names and brief examples where helpful. "
+    "Cite the source URLs at the end of your answer.\n\n"
+    "Formatting rules:\n"
+    "- Write individual Pd object names inline as `[osc~]` (backtick code spans).\n"
+    "- When your answer includes a concrete patch example or signal chain (two or more "
+    "connected objects), emit a fenced code block with language tag pd-patch containing "
+    "a JSON object describing the patch. Use this exact schema:\n"
+    "  {\"objects\": [{\"id\": \"0\", \"type\": \"obj\", \"text\": \"osc~ 440\", \"inlets\": 2, \"outlets\": 1}, ...],\n"
+    "   \"connections\": [{\"srcId\": \"0\", \"srcOutlet\": 0, \"dstId\": \"1\", \"dstInlet\": 0}, ...]}\n"
+    "  type is one of: obj (object box — named objects like osc~, pack, expr~), "
+    "msg (message box — literal values or messages like `0`, `bang`, `0 4 2000`; created with Ctrl+2 in Pd), "
+    "floatatom (number box — displays/sends a float value), "
+    "comment (plain text label, no inlets or outlets). "
+    "inlets and outlets must reflect the actual Pd object counts. "
+    "Keep patch diagrams to 15 objects or fewer; for complex patches, show only the key signal path and describe the rest in prose. "
+    "Place the pd-patch block immediately after the prose that describes it. "
+    "Omit the pd-patch block when merely mentioning individual objects without a connection.\n"
+    "- When describing a signal chain in prose (not a patch block), use a markdown table "
+    "with columns Object and Role, or a numbered list — never multiple objects separated by | on one line."
+)
+
 
 def _make_cache_key(question: str) -> str:
     # Key on the normalized question only, not history. Documentation answers are
@@ -27,7 +80,7 @@ def _make_cache_key(question: str) -> str:
     return hashlib.sha256(question.strip().lower().encode()).hexdigest()
 
 
-def _compress_history(history: list) -> list:
+def _compress_history(history: list[HistoryItem]) -> list[HistoryItem]:
     """Summarize turns older than HISTORY_COMPRESS_AFTER items using Haiku."""
     if len(history) <= HISTORY_COMPRESS_AFTER:
         return history
@@ -59,24 +112,9 @@ def _compress_history(history: list) -> list:
         {"role": "assistant", "content": "Understood."},
     ] + recent
 
-vc = voyageai.Client()
-db = chromadb.PersistentClient(path="./chroma_db")
-collection = db.get_collection("pd_docs")
-llm = anthropic.Anthropic()
-async_llm = anthropic.AsyncAnthropic()
-
-with open("child_chunks.json") as f:
-    child_chunks = json.load(f)
-with open("parent_lookup.json") as f:
-    parent_lookup = json.load(f)
-
-# Build BM25 index over all child chunks for keyword search
-tokenized_corpus = [c["text"].lower().split() for c in child_chunks]
-bm25 = BM25Okapi(tokenized_corpus)
-
 
 @newrelic.agent.function_trace()
-def classify_query(question, history):
+def classify_query(question: str, history: list[HistoryItem]) -> dict[str, Any]:
     """
     Classify the query type and extract object names.
     Also rewrites the question as a standalone search query
@@ -109,9 +147,11 @@ Return only the JSON object, no other text."""
             max_tokens=200,
             messages=[{"role": "user", "content": prompt}]
         )
+    raw = response.content[0].text.strip()
     try:
-        return json.loads(response.content[0].text.strip())
+        return json.loads(raw)
     except json.JSONDecodeError:
+        logger.warning("classify_query returned unparseable JSON: %r", raw)
         return {
             "rewritten_query": question,
             "query_type": "both",
@@ -119,7 +159,13 @@ Return only the JSON object, no other text."""
         }
 
 
-def vector_search(query, top_k=10, content_type=None, object_name=None, query_vector=None):
+def vector_search(
+    query: str,
+    top_k: int = 10,
+    content_type: str | None = None,
+    object_name: str | None = None,
+    query_vector: list[float] | None = None,
+) -> tuple[list[str], list[dict]]:
     """Search ChromaDB with optional metadata filters."""
     if query_vector is None:
         with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
@@ -140,7 +186,7 @@ def vector_search(query, top_k=10, content_type=None, object_name=None, query_ve
     return results["ids"][0], results["metadatas"][0]
 
 
-def bm25_search(query, top_k=10, content_type=None):
+def bm25_search(query: str, top_k: int = 10, content_type: str | None = None) -> list[str]:
     """BM25 keyword search — especially good for exact Pd object names."""
     tokenized_query = query.lower().split()
     scores = bm25.get_scores(tokenized_query)
@@ -154,7 +200,14 @@ def bm25_search(query, top_k=10, content_type=None):
     return [child_chunks[i]["id"] for i in top_indices]
 
 
-def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_query=None, query_vector=None):
+def hybrid_retrieve(
+    query: str,
+    top_k: int = 5,
+    content_type: str | None = None,
+    object_names: list[str] | None = None,
+    bm25_query: str | None = None,
+    query_vector: list[float] | None = None,
+) -> list[Chunk]:
     """
     Combine vector search and BM25 via RRF, return top-k by rank.
     If specific object names are mentioned, also do exact lookups.
@@ -222,7 +275,7 @@ def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_q
 
 
 @newrelic.agent.function_trace()
-def retrieve(question, history=None):
+def retrieve(question: str, history: list[HistoryItem] | None = None) -> tuple[list[Chunk], dict[str, Any]]:
     """Full retrieval pipeline: classify, then search appropriately."""
     if history is None:
         history = []
@@ -271,8 +324,12 @@ def retrieve(question, history=None):
         return obj_results + conceptual_results, classification
 
 
-def _build_chat_messages(question, context_chunks, history):
-    """Build system prompt and messages list for the generation LLM call."""
+def _build_chat_messages(
+    question: str,
+    context_chunks: list[Chunk],
+    history: list[HistoryItem],
+) -> tuple[list[dict], list[dict]]:
+    """Assemble the system block and messages list for a Claude generation call."""
     context_parts = []
     for chunk in context_chunks:
         source = chunk.get("source", "")
@@ -286,40 +343,12 @@ def _build_chat_messages(question, context_chunks, history):
 
     context_str = "\n\n---\n\n".join(context_parts)
 
-    system_prompt = (
-        "You are a helpful assistant that answers questions about Pure Data (Pd), "
-        "a visual programming language for music and multimedia. "
-        "Use the provided documentation excerpts as your primary source. "
-        "You may draw on broader knowledge of Pd to explain concepts or suggest implementation "
-        "strategies, but ground your answer in the documentation where it is relevant. "
-        "If the documentation contradicts general knowledge, prefer the documentation. "
-        "Include relevant object names and brief examples where helpful. "
-        "Cite the source URLs at the end of your answer.\n\n"
-        "Formatting rules:\n"
-        "- Write individual Pd object names inline as `[osc~]` (backtick code spans).\n"
-        "- When your answer includes a concrete patch example or signal chain (two or more "
-        "connected objects), emit a fenced code block with language tag pd-patch containing "
-        "a JSON object describing the patch. Use this exact schema:\n"
-        "  {\"objects\": [{\"id\": \"0\", \"type\": \"obj\", \"text\": \"osc~ 440\", \"inlets\": 2, \"outlets\": 1}, ...],\n"
-        "   \"connections\": [{\"srcId\": \"0\", \"srcOutlet\": 0, \"dstId\": \"1\", \"dstInlet\": 0}, ...]}\n"
-        "  type is one of: obj (object box — named objects like osc~, pack, expr~), "
-        "msg (message box — literal values or messages like `0`, `bang`, `0 4 2000`; created with Ctrl+2 in Pd), "
-        "floatatom (number box — displays/sends a float value), "
-        "comment (plain text label, no inlets or outlets). "
-        "inlets and outlets must reflect the actual Pd object counts. "
-        "Keep patch diagrams to 15 objects or fewer; for complex patches, show only the key signal path and describe the rest in prose. "
-        "Place the pd-patch block immediately after the prose that describes it. "
-        "Omit the pd-patch block when merely mentioning individual objects without a connection.\n"
-        "- When describing a signal chain in prose (not a patch block), use a markdown table "
-        "with columns Object and Role, or a numbered list — never multiple objects separated by | on one line."
-    )
-
-    # Wrap system prompt in a cache_control block so Anthropic caches it across calls.
-    # The prompt text is identical on every request, so this is always a cache hit
-    # after the first call — charged at 10% of normal input token cost.
+    # cache_control marks the stable system prompt for Anthropic prompt caching:
+    # identical text on every request → cache hit after the first call, charged
+    # at 10% of normal input token cost.
     system_block = [{
         "type": "text",
-        "text": system_prompt,
+        "text": SYSTEM_PROMPT,
         "cache_control": {"type": "ephemeral"},
     }]
 
@@ -331,7 +360,7 @@ def _build_chat_messages(question, context_chunks, history):
     return system_block, messages
 
 
-def _chunks_to_sources(chunks):
+def _chunks_to_sources(chunks: list[Chunk]) -> list[dict]:
     return [
         {
             "heading_path": c.get("heading_path", ""),
@@ -344,7 +373,7 @@ def _chunks_to_sources(chunks):
     ]
 
 
-def generate_response(question, context_chunks, history=None):
+def generate_response(question: str, context_chunks: list[Chunk], history: list[HistoryItem] | None = None) -> str:
     """Generate a response using Claude with retrieved context."""
     if history is None:
         history = []
@@ -359,7 +388,7 @@ def generate_response(question, context_chunks, history=None):
 
 
 @newrelic.agent.function_trace()
-async def _async_generate_response_stream(question, context_chunks, history):
+async def _async_generate_response_stream(question: str, context_chunks: list[Chunk], history: list[HistoryItem]):
     """Async generator that yields text chunks from the Claude streaming API."""
     system_block, messages = _build_chat_messages(question, context_chunks, history)
     with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
@@ -373,7 +402,7 @@ async def _async_generate_response_stream(question, context_chunks, history):
                 yield text
 
 
-async def async_stream_chat(question, history=None):
+async def async_stream_chat(question: str, history: list[HistoryItem] | None = None):
     """Async generator entry point for SSE streaming. Yields event dicts."""
     if history is None:
         history = []
@@ -397,7 +426,7 @@ async def async_stream_chat(question, history=None):
         )
         yield {"type": "meta", "sources": _chunks_to_sources(chunks), "query_type": classification["query_type"]}
         yield {"type": "chunk", "text": answer}
-        yield {"type": "done", "history": new_history}
+        yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
         return
 
     newrelic.agent.record_custom_metric('Custom/Cache/Miss', 1)
@@ -429,14 +458,13 @@ async def async_stream_chat(question, history=None):
     ]
     with _cache_lock:
         _response_cache[key] = (full_text, context_chunks, classification, True)
-    yield {"type": "done", "history": new_history}
+    yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
 
 
 def _strip_patch_blocks(text: str) -> str:
     """Remove pd-patch JSON blocks before storing in history.
     The LLM doesn't need to re-read its own patch JSON on follow-up turns,
     and leaving it in would inflate context tokens and risk length validation errors."""
-    import re
     # Strip complete blocks first (opening + closing fence)
     text = re.sub(r'```pd-patch\b.*?```', '[patch diagram]', text, flags=re.DOTALL)
     # Strip truncated blocks — no closing fence, runs to end of string
@@ -444,7 +472,7 @@ def _strip_patch_blocks(text: str) -> str:
     return text.strip()
 
 
-def chat(question, history=None):
+def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, list[Chunk], dict, list[HistoryItem]]:
     """Single-turn entry point used by the API. Returns (answer, chunks, classification, new_history)."""
     if history is None:
         history = []

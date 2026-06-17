@@ -1,8 +1,11 @@
 # chunk.py
-import json, sys
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 def log(msg):
-    print(msg, flush=True)
+    logger.info(msg)
 
 def split_text(text, max_chars=600, overlap_chars=100):
     """Split text into overlapping chunks, preferring sentence boundaries."""
@@ -119,34 +122,38 @@ def build_all_chunks(msp_sections, iem_objects, book_sections):
 
     return child_chunks, parent_chunks
 
-log("Loading parsed_manual.json...")
-with open("parsed_manual.json") as f:
-    msp_sections = json.load(f)
-log(f"  {len(msp_sections)} sections")
 
-log("Loading parsed_object_reference.json...")
-with open("parsed_object_reference.json") as f:
-    iem_objects = json.load(f)
-log(f"  {len(iem_objects)} objects")
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-log("Loading parsed_book.json...")
-with open("parsed_book.json") as f:
-    book_sections = json.load(f)
-log(f"  {len(book_sections)} sections")
+    log("Loading parsed_manual.json...")
+    with open("parsed_manual.json") as f:
+        msp_sections = json.load(f)
+    log(f"  {len(msp_sections)} sections")
 
-log("Building chunks...")
-child_chunks, parent_chunks = build_all_chunks(msp_sections, iem_objects, book_sections)
-log(f"  {len(child_chunks)} child chunks, {len(parent_chunks)} parent chunks")
+    log("Loading parsed_object_reference.json...")
+    with open("parsed_object_reference.json") as f:
+        iem_objects = json.load(f)
+    log(f"  {len(iem_objects)} objects")
 
-log("Writing child_chunks.json...")
-with open("child_chunks.json", "w") as f:
-    json.dump(child_chunks, f, indent=2)
+    log("Loading parsed_book.json...")
+    with open("parsed_book.json") as f:
+        book_sections = json.load(f)
+    log(f"  {len(book_sections)} sections")
 
-log("Writing parent_chunks.json...")
-with open("parent_chunks.json", "w") as f:
-    json.dump(parent_chunks, f, indent=2)
+    log("Building chunks...")
+    child_chunks, parent_chunks = build_all_chunks(msp_sections, iem_objects, book_sections)
+    log(f"  {len(child_chunks)} child chunks, {len(parent_chunks)} parent chunks")
 
-log(f"\nDone.")
-log(f"  MSP manual chunks: {sum(1 for c in child_chunks if c['source'] == 'msp_manual')}")
-log(f"  IEM object entries: {sum(1 for c in child_chunks if c['source'] == 'iem_reference')}")
-log(f"  Puckette book chunks: {sum(1 for c in child_chunks if c['source'] == 'puckette_book')}")
+    log("Writing child_chunks.json...")
+    with open("child_chunks.json", "w") as f:
+        json.dump(child_chunks, f, indent=2)
+
+    log("Writing parent_chunks.json...")
+    with open("parent_chunks.json", "w") as f:
+        json.dump(parent_chunks, f, indent=2)
+
+    log("\nDone.")
+    log(f"  MSP manual chunks: {sum(1 for c in child_chunks if c['source'] == 'msp_manual')}")
+    log(f"  IEM object entries: {sum(1 for c in child_chunks if c['source'] == 'iem_reference')}")
+    log(f"  Puckette book chunks: {sum(1 for c in child_chunks if c['source'] == 'puckette_book')}")
