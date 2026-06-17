@@ -3,13 +3,14 @@
 .env.local
 venv/
 
-# Generated data files
-child_chunks.json
+# Generated data files — rebuild artifacts (not needed at runtime)
 parent_chunks.json
-parent_lookup.json
 parsed_manual.json
 parsed_object_reference.json
 parsed_book.json
+
+# ChromaDB vector index — build locally with embed_and_index.py
+chroma_db/
 chroma_db/
 
 # macOS
