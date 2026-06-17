@@ -9,3 +9,4 @@ slowapi
 python-dotenv
 beautifulsoup4
 requests
+newrelic

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import threading
+import newrelic.agent
 import chromadb
 import cachetools
 from dotenv import load_dotenv
@@ -39,6 +40,7 @@ tokenized_corpus = [c["text"].lower().split() for c in child_chunks]
 bm25 = BM25Okapi(tokenized_corpus)
 
 
+@newrelic.agent.function_trace()
 def classify_query(question, history):
     """
     Classify the query type and extract object names.
@@ -66,11 +68,12 @@ Respond in JSON with these fields:
 
 Return only the JSON object, no other text."""
 
-    response = llm.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=200,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
+        response = llm.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}]
+        )
     try:
         return json.loads(response.content[0].text.strip())
     except json.JSONDecodeError:
@@ -83,7 +86,8 @@ Return only the JSON object, no other text."""
 
 def vector_search(query, top_k=10, content_type=None, object_name=None):
     """Search ChromaDB with optional metadata filters."""
-    query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
+    with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
+        query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
 
     where = {}
     if content_type:
@@ -179,6 +183,7 @@ def hybrid_retrieve(query, top_k=5, content_type=None, object_names=None, bm25_q
     return candidates[:top_k]
 
 
+@newrelic.agent.function_trace()
 def retrieve(question, history=None):
     """Full retrieval pipeline: classify, then search appropriately."""
     if history is None:
@@ -298,17 +303,19 @@ def generate_response(question, context_chunks, history=None):
     return response.content[0].text
 
 
+@newrelic.agent.function_trace()
 async def _async_generate_response_stream(question, context_chunks, history):
     """Async generator that yields text chunks from the Claude streaming API."""
     system_prompt, messages = _build_chat_messages(question, context_chunks, history)
-    async with async_llm.messages.stream(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        system=system_prompt,
-        messages=messages,
-    ) as stream:
-        async for text in stream.text_stream:
-            yield text
+    with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
+        async with async_llm.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=system_prompt,
+            messages=messages,
+        ) as stream:
+            async for text in stream.text_stream:
+                yield text
 
 
 async def async_stream_chat(question, history=None):
@@ -321,6 +328,7 @@ async def async_stream_chat(question, history=None):
         hit = _response_cache.get(key)
 
     if hit is not None:
+        newrelic.agent.record_custom_metric('Custom/Cache/Hit', 1)
         logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
         answer, chunks, classification, extend = hit
         new_history = (
@@ -335,6 +343,7 @@ async def async_stream_chat(question, history=None):
         yield {"type": "done", "history": new_history}
         return
 
+    newrelic.agent.record_custom_metric('Custom/Cache/Miss', 1)
     logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
     context_chunks, classification = await asyncio.to_thread(retrieve, question, history)
 

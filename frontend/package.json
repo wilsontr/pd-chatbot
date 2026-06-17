@@ -12,6 +12,7 @@
   "dependencies": {
     "@base-ui/react": "^1.5.0",
     "@fontsource-variable/geist": "^5.2.9",
+    "@newrelic/browser-agent": "^1.316.0",
     "@tailwindcss/vite": "^4.3.1",
     "@types/dagre": "^0.7.54",
     "class-variance-authority": "^0.7.1",
