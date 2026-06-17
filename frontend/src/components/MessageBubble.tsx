@@ -27,8 +27,9 @@ const markdownComponents: Components = {
     if (className === 'language-pd-patch') {
       return <PdPatchViewer json={String(children).trim()} />
     }
-    return className ? (
-      <code className="block bg-background/60 rounded px-3 py-2 my-2 text-xs font-mono overflow-x-auto">{children}</code>
+    const isBlock = !!className || String(children).includes('\n')
+    return isBlock ? (
+      <code className="block bg-background/60 rounded px-3 py-2 my-2 text-xs font-mono overflow-x-auto whitespace-pre">{children}</code>
     ) : (
       <code className="bg-background/60 rounded px-1 py-0.5 text-xs font-mono">{children}</code>
     )
