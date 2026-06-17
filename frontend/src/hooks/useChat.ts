@@ -49,7 +49,7 @@ export function useChat() {
       } else {
         setMessages(prev => [...prev, {
           role: 'assistant',
-          content: 'Could not reach the API server. Make sure uvicorn is running on port 8000.',
+          content: 'Could not reach the API server. Please try again later.',
         }])
       }
     } finally {
