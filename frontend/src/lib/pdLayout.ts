@@ -5,9 +5,11 @@ const CHAR_W = 7.2    // Courier New 12px, monospace width per character
 const BOX_PAD_X = 4   // horizontal padding inside box
 export const BOX_H = 20
 const MIN_BOX_W = 36
+const MSG_NOTCH_DEPTH = 6  // matches CORNER_CUT in PdPatchViewer — extra right clearance for msg boxes
 
-export function estimateBoxWidth(text: string): number {
-  return Math.max(MIN_BOX_W, Math.ceil(text.length * CHAR_W) + BOX_PAD_X * 2)
+export function estimateBoxWidth(text: string | undefined, type?: string): number {
+  const rightExtra = type === 'msg' ? MSG_NOTCH_DEPTH : 0
+  return Math.max(MIN_BOX_W, Math.ceil((text ?? '').length * CHAR_W) + BOX_PAD_X * 2 + rightExtra)
 }
 
 export interface LayoutNode {
@@ -23,7 +25,7 @@ export function layoutPatch(patch: PdPatch): Map<string, LayoutNode> {
   g.setDefaultEdgeLabel(() => ({}))
 
   for (const obj of patch.objects) {
-    g.setNode(obj.id, { width: estimateBoxWidth(obj.text), height: BOX_H })
+    g.setNode(obj.id, { width: estimateBoxWidth(obj.text, obj.type), height: BOX_H })
   }
   for (const conn of patch.connections) {
     if (conn.srcId && conn.dstId) g.setEdge(conn.srcId, conn.dstId)

@@ -24,7 +24,7 @@ def split_text(text, max_chars=600, overlap_chars=100):
         start += advance
     return chunks
 
-def build_all_chunks(msp_sections, iem_objects):
+def build_all_chunks(msp_sections, iem_objects, book_sections):
     child_chunks = []
     parent_chunks = []
 
@@ -89,6 +89,34 @@ def build_all_chunks(msp_sections, iem_objects):
                     **base,
                 })
 
+    # --- Puckette book: same parent-child chunking as MSP manual ---
+    for section in book_sections:
+        full_text = f"{section['heading_path']}\n\n{section['text']}"
+
+        parent_id = f"book_parent_{len(parent_chunks)}"
+        parent_chunks.append({
+            "id": parent_id,
+            "text": full_text,
+            "source": "puckette_book",
+            "content_type": "conceptual",
+            "object_name": None,
+            "heading_path": section["heading_path"],
+            "url": section["url"]
+        })
+
+        child_texts = split_text(full_text)
+        for child_text in child_texts:
+            child_chunks.append({
+                "id": f"book_child_{len(child_chunks)}",
+                "parent_id": parent_id,
+                "text": child_text,
+                "source": "puckette_book",
+                "content_type": "conceptual",
+                "object_name": None,
+                "heading_path": section["heading_path"],
+                "url": section["url"]
+            })
+
     return child_chunks, parent_chunks
 
 log("Loading parsed_manual.json...")
@@ -101,8 +129,13 @@ with open("parsed_object_reference.json") as f:
     iem_objects = json.load(f)
 log(f"  {len(iem_objects)} objects")
 
+log("Loading parsed_book.json...")
+with open("parsed_book.json") as f:
+    book_sections = json.load(f)
+log(f"  {len(book_sections)} sections")
+
 log("Building chunks...")
-child_chunks, parent_chunks = build_all_chunks(msp_sections, iem_objects)
+child_chunks, parent_chunks = build_all_chunks(msp_sections, iem_objects, book_sections)
 log(f"  {len(child_chunks)} child chunks, {len(parent_chunks)} parent chunks")
 
 log("Writing child_chunks.json...")
@@ -116,3 +149,4 @@ with open("parent_chunks.json", "w") as f:
 log(f"\nDone.")
 log(f"  MSP manual chunks: {sum(1 for c in child_chunks if c['source'] == 'msp_manual')}")
 log(f"  IEM object entries: {sum(1 for c in child_chunks if c['source'] == 'iem_reference')}")
+log(f"  Puckette book chunks: {sum(1 for c in child_chunks if c['source'] == 'puckette_book')}")

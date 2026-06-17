@@ -69,6 +69,8 @@ export function MessageBubble({ message }: { message: Message }) {
                   className={`text-xs font-normal hover:bg-accent transition-colors ${
                     src.source === 'iem_reference'
                       ? 'border-blue-200 text-blue-700 hover:border-blue-300 dark:border-blue-800 dark:text-blue-400'
+                      : src.source === 'puckette_book'
+                      ? 'border-purple-200 text-purple-700 hover:border-purple-300 dark:border-purple-800 dark:text-purple-400'
                       : 'border-border text-muted-foreground'
                   }`}
                 >

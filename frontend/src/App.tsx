@@ -121,10 +121,15 @@ export default function App() {
              className="underline underline-offset-2 hover:text-muted-foreground transition-colors">
             MSP Manual
           </a>
-          {' '}or{' '}
+          {', '}
           <a href="https://pd.iem.sh/objects/" target="_blank" rel="noreferrer"
              className="underline underline-offset-2 hover:text-muted-foreground transition-colors">
             IEM Object Reference
+          </a>
+          {', or '}
+          <a href="http://msp.ucsd.edu/techniques.htm" target="_blank" rel="noreferrer"
+             className="underline underline-offset-2 hover:text-muted-foreground transition-colors">
+            Theory and Techniques of Electronic Music
           </a>
         </p>
       </form>

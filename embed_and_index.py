@@ -26,7 +26,12 @@ with open("parent_chunks.json") as f:
 parent_lookup = {p["id"]: p for p in parent_chunks}
 
 db = chromadb.PersistentClient(path="./chroma_db")
-collection = db.get_or_create_collection(
+try:
+    db.delete_collection("pd_docs")
+    print("Deleted existing pd_docs collection")
+except Exception:
+    pass
+collection = db.create_collection(
     name="pd_docs",
     metadata={"hnsw:space": "cosine"}
 )

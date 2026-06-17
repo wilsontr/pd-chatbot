@@ -24,8 +24,10 @@ function boxPoints(x: number, y: number, w: number, h: number, type: PdObject['t
     coords.map(([px, py]) => `${px},${py}`).join(' ')
   const C = CORNER_CUT
   if (type === 'msg') {
-    // Rectangle with bottom-right corner cut at 45° (Pd message box "flag" shape)
-    return pts([[x, y], [x+w, y], [x+w, y+h-C], [x+w-C, y+h], [x, y+h]])
+    // Full-width corners with small inward tails to a flat inset section —
+    // majority of the right edge is the flat inset part, matching Pd's message box shape
+    const T = 4  // tail height in px
+    return pts([[x, y], [x+w, y], [x+w-C, y+T], [x+w-C, y+h-T], [x+w, y+h], [x, y+h]])
   }
   if (type === 'floatatom') {
     // Rectangle with top-right corner cut at 45° (Pd number box shape)
@@ -50,15 +52,19 @@ function parsePatch(json: string): { patch: PdPatch } | { error: string } {
   const patch = raw as unknown as PdPatch
 
   // Drop objects that appear in no connections — they are LLM omissions.
-  // Comments are intentionally standalone and are kept regardless.
+  // Comments and known UI objects are intentionally standalone and are kept regardless.
+  const PD_UI_OBJECTS = new Set(['bng', 'tgl', 'hsl', 'vsl', 'hradio', 'vradio', 'vu', 'cnv', 'nbx'])
   const connected = new Set<string>()
   for (const c of patch.connections) {
     connected.add(c.srcId)
     connected.add(c.dstId)
   }
-  const objects = patch.objects.filter(
-    o => o.type === 'comment' || connected.has(o.id)
-  )
+  const objects = patch.objects.filter(o => {
+    if (o.type === 'comment') return true
+    if (connected.has(o.id)) return true
+    const objName = o.text?.trim().split(/\s+/)[0]
+    return PD_UI_OBJECTS.has(objName)
+  })
   return { patch: { ...patch, objects } }
 }
 

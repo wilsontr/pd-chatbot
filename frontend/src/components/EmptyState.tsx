@@ -16,10 +16,15 @@ export function EmptyState({ onSuggest }: { onSuggest: (s: string) => void }) {
              className="underline underline-offset-2 hover:text-foreground transition-colors">
             Pure Data Manual
           </a>
-          {' '}and{' '}
+          {', '}
           <a href="https://pd.iem.sh/objects/" target="_blank" rel="noreferrer"
              className="underline underline-offset-2 hover:text-foreground transition-colors">
             IEM Object Reference
+          </a>
+          {', and '}
+          <a href="http://msp.ucsd.edu/techniques.htm" target="_blank" rel="noreferrer"
+             className="underline underline-offset-2 hover:text-foreground transition-colors">
+            The Theory and Techniques of Electronic Music
           </a>
         </p>
         <p className="text-xs text-muted-foreground/70 max-w-sm mx-auto">
