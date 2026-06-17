@@ -53,7 +53,9 @@ function parsePatch(json: string): { patch: PdPatch } | { error: string } {
 
   // Drop objects that appear in no connections — they are LLM omissions.
   // Comments and known UI objects are intentionally standalone and are kept regardless.
-  const PD_UI_OBJECTS = new Set(['bng', 'tgl', 'hsl', 'vsl', 'hradio', 'vradio', 'vu', 'cnv', 'nbx'])
+  // Objects that are intentionally standalone — either UI widgets with no wires,
+  // or named data stores accessed by name (table, array) rather than by connection.
+  const PD_UI_OBJECTS = new Set(['bng', 'tgl', 'hsl', 'vsl', 'hradio', 'vradio', 'vu', 'cnv', 'nbx', 'table', 'array'])
   const connected = new Set<string>()
   for (const c of patch.connections) {
     connected.add(c.srcId)
@@ -87,7 +89,7 @@ export function PdPatchViewer({ json }: { json: string }) {
   const objMap = new Map(patch.objects.map(o => [o.id, o]))
 
   return (
-    <div className="overflow-x-auto my-3 rounded border border-black/20 inline-block max-w-full">
+    <div className="overflow-x-auto my-3 rounded border border-black/20 inline-block max-w-full" data-patch-json={json}>
       <svg
         width={svgW}
         height={svgH}
