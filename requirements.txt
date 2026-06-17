@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+chromadb
+voyageai
+anthropic
+rank-bm25
+cachetools
+slowapi
+python-dotenv
+beautifulsoup4
+requests
