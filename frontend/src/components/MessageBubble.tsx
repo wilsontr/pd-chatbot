@@ -1,9 +1,31 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
 import { PdPatchViewer } from './PdPatchViewer'
 import type { Message } from '../types'
 import type { Components } from 'react-markdown'
+
+function PatchDiagramSkeleton() {
+  return (
+    <div className="rounded border border-border/50 bg-background/40 p-3 my-2 space-y-2">
+      <div className="flex gap-4 justify-center">
+        <Skeleton className="h-7 w-20" />
+        <Skeleton className="h-7 w-24" />
+        <Skeleton className="h-7 w-16" />
+      </div>
+      <div className="flex justify-center">
+        <Skeleton className="h-3 w-px mx-8" />
+        <Skeleton className="h-3 w-px mx-8" />
+      </div>
+      <div className="flex gap-6 justify-center">
+        <Skeleton className="h-7 w-20" />
+        <Skeleton className="h-7 w-20" />
+      </div>
+      <p className="text-xs text-muted-foreground/60 text-center pt-1">Generating diagram…</p>
+    </div>
+  )
+}
 
 const markdownComponents: Components = {
   table: ({ children }) => (
@@ -26,6 +48,9 @@ const markdownComponents: Components = {
   code: ({ children, className }) => {
     if (className === 'language-pd-patch') {
       return <PdPatchViewer json={String(children).trim()} />
+    }
+    if (className === 'language-loading-patch') {
+      return <PatchDiagramSkeleton />
     }
     const isBlock = !!className || String(children).includes('\n')
     return isBlock ? (

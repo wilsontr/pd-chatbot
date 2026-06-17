@@ -6,7 +6,7 @@ function getDisplayContent(raw: string): string {
   if (lastOpen === -1) return raw
   const after = raw.slice(lastOpen + 11)
   if (after.includes('```')) return raw
-  return raw.slice(0, lastOpen) + '\n*Generating diagram…*\n'
+  return raw.slice(0, lastOpen) + '\n```loading-patch\n```\n'
 }
 
 export function useChat() {
