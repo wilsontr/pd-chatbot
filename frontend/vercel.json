@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://REPLACE_WITH_RENDER_URL/:path*"
+      "destination": "https://pd-chatbot-production-b767.up.railway.app/:path*"
     }
   ]
 }
