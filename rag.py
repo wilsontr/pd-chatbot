@@ -1,11 +1,26 @@
 # rag.py
+import hashlib
 import json
+import logging
+import threading
 import chromadb
+import cachetools
 from dotenv import load_dotenv
 load_dotenv()
 import voyageai
 from rank_bm25 import BM25Okapi
 import anthropic
+
+logger = logging.getLogger(__name__)
+
+_response_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=3600)
+_cache_lock = threading.Lock()
+
+def _make_cache_key(question: str) -> str:
+    # Key on the normalized question only, not history. Documentation answers are
+    # objective — the same question asked mid-session should return the cached answer
+    # rather than paying full retrieval + LLM cost again.
+    return hashlib.sha256(question.strip().lower().encode()).hexdigest()
 
 vc = voyageai.Client()
 db = chromadb.PersistentClient(path="./chroma_db")
@@ -231,10 +246,19 @@ def generate_response(question, context_chunks, history=None):
         "Include relevant object names and brief examples where helpful. "
         "Cite the source URLs at the end of your answer.\n\n"
         "Formatting rules:\n"
-        "- When describing a signal chain or series of Pd objects, use a markdown table "
-        "with columns Object and Role, or a numbered list — one object per row or item. "
-        "Never write multiple objects separated by | on a single line.\n"
-        "- Write individual Pd object names inline as `[osc~]` (backtick code spans)."
+        "- Write individual Pd object names inline as `[osc~]` (backtick code spans).\n"
+        "- When your answer includes a concrete patch example or signal chain (two or more "
+        "connected objects), emit a fenced code block with language tag pd-patch containing "
+        "a JSON object describing the patch. Use this exact schema:\n"
+        "  {\"objects\": [{\"id\": \"0\", \"type\": \"obj\", \"text\": \"osc~ 440\", \"inlets\": 2, \"outlets\": 1}, ...],\n"
+        "   \"connections\": [{\"srcId\": \"0\", \"srcOutlet\": 0, \"dstId\": \"1\", \"dstInlet\": 0}, ...]}\n"
+        "  type is one of: obj, msg, floatatom, comment. "
+        "inlets and outlets must reflect the actual Pd object counts. "
+        "Keep patch diagrams to 15 objects or fewer; for complex patches, show only the key signal path and describe the rest in prose. "
+        "Place the pd-patch block immediately after the prose that describes it. "
+        "Omit the pd-patch block when merely mentioning individual objects without a connection.\n"
+        "- When describing a signal chain in prose (not a patch block), use a markdown table "
+        "with columns Object and Role, or a numbered list — never multiple objects separated by | on one line."
     )
 
     messages = list(history) + [{
@@ -244,31 +268,64 @@ def generate_response(question, context_chunks, history=None):
 
     response = llm.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1024,
+        max_tokens=4096,
         system=system_prompt,
         messages=messages
     )
     return response.content[0].text
 
 
+def _strip_patch_blocks(text: str) -> str:
+    """Remove pd-patch JSON blocks before storing in history.
+    The LLM doesn't need to re-read its own patch JSON on follow-up turns,
+    and leaving it in would inflate context tokens and risk length validation errors."""
+    import re
+    # Strip complete blocks first (opening + closing fence)
+    text = re.sub(r'```pd-patch\b.*?```', '[patch diagram]', text, flags=re.DOTALL)
+    # Strip truncated blocks — no closing fence, runs to end of string
+    text = re.sub(r'```pd-patch\b.*', '[patch diagram]', text, flags=re.DOTALL)
+    return text.strip()
+
+
 def chat(question, history=None):
     """Single-turn entry point used by the API. Returns (answer, chunks, classification, new_history)."""
     if history is None:
         history = []
+
+    key = _make_cache_key(question)
+    with _cache_lock:
+        hit = _response_cache.get(key)
+
+    if hit is not None:
+        logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
+        answer, chunks, classification, extend = hit
+        new_history = (
+            history + [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": _strip_patch_blocks(answer)},
+            ]
+            if extend else history
+        )
+        return answer, chunks, classification, new_history
+
+    logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
     context_chunks, classification = retrieve(question, history)
     if not context_chunks:
-        return (
+        answer = (
             "I couldn't find any relevant Pure Data documentation for that question. "
-            "Try asking about a specific Pd object, patching concept, or audio technique.",
-            [],
-            classification,
-            history,
+            "Try asking about a specific Pd object, patching concept, or audio technique."
         )
+        with _cache_lock:
+            _response_cache[key] = (answer, [], classification, False)
+        return answer, [], classification, history
+
     answer = generate_response(question, context_chunks, history)
     new_history = history + [
         {"role": "user", "content": question},
-        {"role": "assistant", "content": answer},
+        {"role": "assistant", "content": _strip_patch_blocks(answer)},
     ]
+    with _cache_lock:
+        _response_cache[key] = (answer, context_chunks, classification, True)
     return answer, context_chunks, classification, new_history
 
 

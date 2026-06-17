@@ -13,7 +13,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from rag import chat
+from rag import chat, _response_cache
 
 # --- Rate limiter ---
 limiter = Limiter(key_func=get_remote_address)
@@ -41,7 +41,7 @@ def require_api_key(key: str = Security(api_key_header)):
 # --- Request / response models ---
 class HistoryItem(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(max_length=4000)
+    content: str = Field(max_length=8000)
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
@@ -83,4 +83,11 @@ async def chat_endpoint(request: Request, req: ChatRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "cache": {
+            "size": len(_response_cache),
+            "maxsize": _response_cache.maxsize,
+            "ttl_seconds": _response_cache.ttl,
+        },
+    }
