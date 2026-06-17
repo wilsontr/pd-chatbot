@@ -229,7 +229,12 @@ def generate_response(question, context_chunks, history=None):
         "strategies, but ground your answer in the documentation where it is relevant. "
         "If the documentation contradicts general knowledge, prefer the documentation. "
         "Include relevant object names and brief examples where helpful. "
-        "Cite the source URLs at the end of your answer."
+        "Cite the source URLs at the end of your answer.\n\n"
+        "Formatting rules:\n"
+        "- When describing a signal chain or series of Pd objects, use a markdown table "
+        "with columns Object and Role, or a numbered list — one object per row or item. "
+        "Never write multiple objects separated by | on a single line.\n"
+        "- Write individual Pd object names inline as `[osc~]` (backtick code spans)."
     )
 
     messages = list(history) + [{
