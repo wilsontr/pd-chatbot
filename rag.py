@@ -1,4 +1,5 @@
 # rag.py
+import asyncio
 import hashlib
 import json
 import logging
@@ -26,6 +27,7 @@ vc = voyageai.Client()
 db = chromadb.PersistentClient(path="./chroma_db")
 collection = db.get_collection("pd_docs")
 llm = anthropic.Anthropic()
+async_llm = anthropic.AsyncAnthropic()
 
 with open("child_chunks.json") as f:
     child_chunks = json.load(f)
@@ -218,11 +220,8 @@ def retrieve(question, history=None):
         return obj_results + conceptual_results, classification
 
 
-def generate_response(question, context_chunks, history=None):
-    """Generate a response using Claude with retrieved context."""
-    if history is None:
-        history = []
-
+def _build_chat_messages(question, context_chunks, history):
+    """Build system prompt and messages list for the generation LLM call."""
     context_parts = []
     for chunk in context_chunks:
         source = chunk.get("source", "")
@@ -269,6 +268,27 @@ def generate_response(question, context_chunks, history=None):
         "content": f"Documentation excerpts:\n\n{context_str}\n\n---\n\nQuestion: {question}"
     }]
 
+    return system_prompt, messages
+
+
+def _chunks_to_sources(chunks):
+    return [
+        {
+            "heading_path": c.get("heading_path", ""),
+            "url": c.get("url", ""),
+            "source": c.get("source", ""),
+            "content_type": c.get("content_type", ""),
+            "object_name": c.get("object_name"),
+        }
+        for c in chunks
+    ]
+
+
+def generate_response(question, context_chunks, history=None):
+    """Generate a response using Claude with retrieved context."""
+    if history is None:
+        history = []
+    system_prompt, messages = _build_chat_messages(question, context_chunks, history)
     response = llm.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=4096,
@@ -276,6 +296,74 @@ def generate_response(question, context_chunks, history=None):
         messages=messages
     )
     return response.content[0].text
+
+
+async def _async_generate_response_stream(question, context_chunks, history):
+    """Async generator that yields text chunks from the Claude streaming API."""
+    system_prompt, messages = _build_chat_messages(question, context_chunks, history)
+    async with async_llm.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        system=system_prompt,
+        messages=messages,
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
+
+
+async def async_stream_chat(question, history=None):
+    """Async generator entry point for SSE streaming. Yields event dicts."""
+    if history is None:
+        history = []
+
+    key = _make_cache_key(question)
+    with _cache_lock:
+        hit = _response_cache.get(key)
+
+    if hit is not None:
+        logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
+        answer, chunks, classification, extend = hit
+        new_history = (
+            history + [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": _strip_patch_blocks(answer)},
+            ]
+            if extend else history
+        )
+        yield {"type": "meta", "sources": _chunks_to_sources(chunks), "query_type": classification["query_type"]}
+        yield {"type": "chunk", "text": answer}
+        yield {"type": "done", "history": new_history}
+        return
+
+    logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
+    context_chunks, classification = await asyncio.to_thread(retrieve, question, history)
+
+    if not context_chunks:
+        answer = (
+            "I couldn't find any relevant Pure Data documentation for that question. "
+            "Try asking about a specific Pd object, patching concept, or audio technique."
+        )
+        with _cache_lock:
+            _response_cache[key] = (answer, [], classification, False)
+        yield {"type": "meta", "sources": [], "query_type": classification["query_type"]}
+        yield {"type": "chunk", "text": answer}
+        yield {"type": "done", "history": history}
+        return
+
+    yield {"type": "meta", "sources": _chunks_to_sources(context_chunks), "query_type": classification["query_type"]}
+
+    full_text = ""
+    async for text in _async_generate_response_stream(question, context_chunks, history):
+        full_text += text
+        yield {"type": "chunk", "text": text}
+
+    new_history = history + [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": _strip_patch_blocks(full_text)},
+    ]
+    with _cache_lock:
+        _response_cache[key] = (full_text, context_chunks, classification, True)
+    yield {"type": "done", "history": new_history}
 
 
 def _strip_patch_blocks(text: str) -> str:

@@ -11,7 +11,7 @@ import { EmptyState } from './components/EmptyState'
 const MAX_TEXTAREA_HEIGHT = 128 // px, matches max-h-[8rem]
 
 export default function App() {
-  const { messages, loading, send } = useChat()
+  const { messages, loading, streaming, send } = useChat()
   const inputHistory = useInputHistory()
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -80,7 +80,7 @@ export default function App() {
 
           {messages.map((msg, i) => <MessageBubble key={i} message={msg} />)}
 
-          {loading && (
+          {loading && !streaming && (
             <div className="flex gap-3">
               <div className="bg-muted rounded-xl px-4 py-2.5 text-sm text-muted-foreground">
                 <span className="inline-flex gap-1">

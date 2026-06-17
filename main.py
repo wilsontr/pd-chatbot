@@ -1,11 +1,12 @@
 # main.py
-import asyncio
+import json
 import os
 from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Request, Depends, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
@@ -13,7 +14,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from rag import chat, _response_cache
+from rag import _response_cache, async_stream_chat
 
 # --- Rate limiter ---
 limiter = Limiter(key_func=get_remote_address)
@@ -61,24 +62,19 @@ class ChatResponse(BaseModel):
     history: List[HistoryItem]
 
 # --- Endpoints ---
-@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
+@app.post("/chat", dependencies=[Depends(require_api_key)])
 @limiter.limit("10/minute")
 async def chat_endpoint(request: Request, req: ChatRequest):
     history_dicts = [h.model_dump() for h in req.history]
-    answer, chunks, classification, new_history = await asyncio.to_thread(
-        chat, req.message, history_dicts
-    )
-    return ChatResponse(
-        answer=answer,
-        sources=[Source(
-            heading_path=c["heading_path"],
-            url=c["url"],
-            source=c["source"],
-            content_type=c["content_type"],
-            object_name=c.get("object_name"),
-        ) for c in chunks],
-        query_type=classification["query_type"],
-        history=[HistoryItem(**h) for h in new_history],
+
+    async def generate():
+        async for event in async_stream_chat(req.message, history_dicts):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 @app.get("/health")
