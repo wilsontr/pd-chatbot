@@ -35,7 +35,7 @@ def run() -> None:
     try:
         db.delete_collection("pd_docs")
         logger.info("Deleted existing pd_docs collection")
-    except ValueError:
+    except chromadb.errors.NotFoundError:
         pass  # collection didn't exist yet
     collection = db.create_collection(
         name="pd_docs",
