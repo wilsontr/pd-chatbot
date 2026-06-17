@@ -2,6 +2,8 @@
 
 A retrieval-augmented generation (RAG) chatbot for answering questions about [Pure Data](http://msp.ucsd.edu/Pd_documentation/) (Pd) — a visual programming language for audio and multimedia. The assistant draws on the official Pd documentation and a synthesis textbook to answer questions about objects, patching concepts, audio signal processing, and synthesis techniques.
 
+![Pd Documentation Assistant](assets/chatbot.png)
+
 ## Sources
 
 The corpus is built from three sources:
