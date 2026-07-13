@@ -44,6 +44,8 @@ At query time, `rag.py` runs a hybrid search:
 4. **Reciprocal Rank Fusion (RRF)** — combines vector and BM25 rankings into a single ranked list
 5. **Parent retrieval** — the top child chunks are mapped back to their full parent sections for richer context
 
+Retrieval quality is measured and regressed in CI — see **[Evaluation Results](EVAL.md)** for current hybrid RRF vs. vector-only vs. BM25-only metrics.
+
 ### Response Generation
 
 Retrieved chunks are passed as context to Claude Sonnet, which streams a response grounded in the documentation via Server-Sent Events (SSE). The frontend begins rendering tokens as they arrive, so answers start appearing within ~1 second of retrieval completing. Responses may include:

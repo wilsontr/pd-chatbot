@@ -148,6 +148,10 @@ Return only the JSON object, no other text."""
             messages=[{"role": "user", "content": prompt}]
         )
     raw = response.content[0].text.strip()
+    # Strip markdown code fences if the model wraps JSON in ```json ... ```
+    raw = re.sub(r'^```(?:json)?\s*\n', '', raw)
+    raw = re.sub(r'\n```\s*$', '', raw)
+    raw = raw.strip()
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -171,16 +175,22 @@ def vector_search(
         with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
             query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
 
-    where = {}
+    filters = []
     if content_type:
-        where["content_type"] = {"$eq": content_type}
+        filters.append({"content_type": {"$eq": content_type}})
     if object_name:
-        where["object_name"] = {"$eq": object_name}
+        filters.append({"object_name": {"$eq": object_name}})
+    if len(filters) == 1:
+        where = filters[0]
+    elif len(filters) > 1:
+        where = {"$and": filters}
+    else:
+        where = None
 
     results = collection.query(
         query_embeddings=[query_vector],
         n_results=top_k,
-        where=where if where else None,
+        where=where,
         include=["metadatas", "distances"]
     )
     return results["ids"][0], results["metadatas"][0]

@@ -1,0 +1,360 @@
+[
+  {
+    "id": "q_001",
+    "question": "What are the inlets of [osc~] and what do they do?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_158"
+    ],
+    "reference_answer": "The [osc~] object has two inlets. The first (leftmost) inlet takes a signal specifying the frequency in Hz. The second inlet takes a float for phase cycle adjustment (0 to 1). The output is a cosine waveform.",
+    "difficulty": "easy",
+    "notes": "Basic object reference lookup"
+  },
+  {
+    "id": "q_002",
+    "question": "How do I use [dac~] to output audio to my sound card?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_43"
+    ],
+    "reference_answer": "[dac~] outputs audio signals to your sound card. You specify the number of channels as creation arguments (e.g. [dac~ 1 2] for stereo). Connect the signal you want to hear to its inlets. The number of Pd input/output channels is configured in Pd's audio settings dialog. If multiple signals are connected to the same channel, they are added together.",
+    "difficulty": "easy",
+    "notes": "Fundamental object everyone uses"
+  },
+  {
+    "id": "q_003",
+    "question": "What is [phasor~] and how does it differ from [osc~]?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_169"
+    ],
+    "reference_answer": "[phasor~] is a phase ramp generator that outputs a sawtooth wave ramping from 0 to 1 at the specified frequency. Unlike [osc~] which outputs a cosine wave, [phasor~] outputs a linear ramp. It's commonly used for table lookup via [cos~] or [tabread4~]. The frequency input can be a float or signal. A phase reset message sets the phase from 0 to 1.",
+    "difficulty": "easy",
+    "notes": "Common confusion \u2014 phasor vs osc"
+  },
+  {
+    "id": "q_004",
+    "question": "How does [line~] work and what's the gotcha with its right inlet?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_110"
+    ],
+    "reference_answer": "[line~] is an audio ramp generator. You send a target value to the left inlet and a ramp time in milliseconds to the right inlet. Important gotcha: the right inlet does NOT remember old values, unlike every other inlet in Pd. So you must always send a time value to the right inlet BEFORE sending the target value to the left inlet. If you don't specify a time first, [line~] jumps immediately to the target value.",
+    "difficulty": "medium",
+    "notes": "Has a well-known footgun with right inlet"
+  },
+  {
+    "id": "q_005",
+    "question": "What does [vcf~] do? What kind of filter is it?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_266"
+    ],
+    "reference_answer": "[vcf~] is a voltage-controlled band/low-pass filter. The first inlet takes an audio signal to filter. The second inlet takes either a control or audio signal to set the center frequency. It has two outlets: the left outlet is a bandpass filter output, and the right outlet is a lowpass filter output. These can be used separately or combined.",
+    "difficulty": "easy",
+    "notes": "Core audio object"
+  },
+  {
+    "id": "q_006",
+    "question": "How do I use [snapshot~] to read the current value of an audio signal?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_221"
+    ],
+    "reference_answer": "[snapshot~] converts a signal to a control value on demand. When it receives a bang in its left inlet, it outputs the current value of the signal connected to its right inlet. You can use it to read signal values at specific moments for visualization or control purposes.",
+    "difficulty": "easy",
+    "notes": "Signal-to-control conversion"
+  },
+  {
+    "id": "q_007",
+    "question": "How do [pack] and [unpack] work for assembling compound messages?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_162"
+    ],
+    "reference_answer": "[pack] assembles incoming values into a compound message. You specify the types (float/'f', symbol/'s', pointer/'p') as creation arguments, which determines the number of inlets. When each inlet receives a value, [pack] outputs the combined message. [unpack] does the reverse \u2014 it splits a compound message into individual values.",
+    "difficulty": "medium",
+    "notes": "Core message objects"
+  },
+  {
+    "id": "q_008",
+    "question": "What is [route] used for and how does it differ from [select]?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_204"
+    ],
+    "reference_answer": "[route] checks the first element of a message against a list of arguments and passes the message to the corresponding outlet (matching argument) or the rightmost outlet (no match). It differs from [select] in that [select] only matches against the entire message, while [route] only checks the first element and passes through the rest of the message body.",
+    "difficulty": "medium",
+    "notes": "Commonly confused objects"
+  },
+  {
+    "id": "q_009",
+    "question": "How does [metro] work for creating rhythmic patterns?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_132"
+    ],
+    "reference_answer": "[metro] outputs a bang at regular intervals. You specify the interval time in milliseconds as the creation argument. Sending a nonzero number starts the metronome; sending 0 stops it. You can change the interval by sending a new number. It's fundamental for sequencing and rhythmic patterns in Pd.",
+    "difficulty": "easy",
+    "notes": "Core timing object"
+  },
+  {
+    "id": "q_010",
+    "question": "What is [spigot] and how do I use it to gate messages?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_222"
+    ],
+    "reference_answer": "[spigot] is a message gate. It has two inlets: the right inlet controls whether messages pass through. When the right inlet receives a nonzero number, messages sent to the left inlet pass through to the outlet. When it receives 0, messages are blocked. This is useful for conditional message routing.",
+    "difficulty": "easy",
+    "notes": "Basic control object"
+  },
+  {
+    "id": "q_011",
+    "question": "What are hot and cold inlets in Pd, and what is right-to-left outlet order?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_31"
+    ],
+    "reference_answer": "In Pd, most objects treat their leftmost inlet as 'hot' \u2014 sending a value there triggers the object's computation and produces output. Other inlets are 'cold' \u2014 they store values without triggering computation. When an object has multiple outlets, they fire in right-to-left order, which is crucial for ensuring correct execution order when chaining operations.",
+    "difficulty": "medium",
+    "notes": "Core concept every Pd user must understand"
+  },
+  {
+    "id": "q_012",
+    "question": "What are message boxes and how do I use them in Pd?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_32"
+    ],
+    "reference_answer": "Message boxes are text boxes where you type a message. When activated by clicking or receiving a message at its inlet, it sends the typed message to its outlet. You can use dollar sign variables ($1, $2, etc.) to substitute values received at the inlet. Message boxes can contain multiple messages separated by commas, and escape sequences like \\$ for literal dollar signs.",
+    "difficulty": "easy",
+    "notes": "Fundamental patching UI concept"
+  },
+  {
+    "id": "q_013",
+    "question": "How does Pd's audio signal processing work? What are tilde objects?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_36"
+    ],
+    "reference_answer": "Audio computations in Pd are handled by 'tilde objects' \u2014 objects whose names end with ~ like [osc~] or [*~]. These operate on audio signals at the sample rate. Audio connections are drawn as thicker cords between objects. Pd processes audio in blocks (64 samples by default), computing all tilde objects in the signal chain within each block.",
+    "difficulty": "easy",
+    "notes": "Fundamental audio architecture"
+  },
+  {
+    "id": "q_014",
+    "question": "How do I convert between audio signals and control messages in Pd?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_37"
+    ],
+    "reference_answer": "To convert a control value to an audio signal, use [sig~]. To convert an audio signal back to a control value, use [snapshot~] (which outputs the signal's current value when banged). There's also [env~] for envelope following, and [threshold~] for detecting when a signal crosses a threshold.",
+    "difficulty": "medium",
+    "notes": "Common pattern for hybrid control/audio patches"
+  },
+  {
+    "id": "q_015",
+    "question": "What is depth-first message passing in Pd?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_30"
+    ],
+    "reference_answer": "Pd uses depth-first message passing. When a message is triggered, the receiving object may send further messages to its own receivers, and so on recursively. Each chain of messages is followed to its conclusion before the next outlet fires. Combined with right-to-left outlet order, this ensures deterministic execution order in patches.",
+    "difficulty": "medium",
+    "notes": "Critical for understanding execution order"
+  },
+  {
+    "id": "q_016",
+    "question": "How does Pd handle numerical precision? Does Pd have integers?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_29"
+    ],
+    "reference_answer": "Pd does not have a separate integer type \u2014 all number atoms are floats (32-bit floating point). This means calculations may have floating-point precision issues. However, Pd's audio signals use 32-bit floats internally, providing good dynamic range. You need to be aware of floating-point rounding when doing exact comparisons.",
+    "difficulty": "medium",
+    "notes": "Important detail for DSP programming"
+  },
+  {
+    "id": "q_017",
+    "question": "What are subpatches and abstractions in Pd? How do they differ?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_52",
+      "msp_parent_53"
+    ],
+    "reference_answer": "Pd has two subpatch mechanisms. One-off subpatches are created via [pd myname] and exist only within the parent patch. Abstractions are separate .pd files saved to disk and invoked as [abstractionname]. Abstractions can be reused across multiple patches and accept creation arguments via $1, $2, etc. The key difference is reusability \u2014 abstractions are saved as files and shared, while one-off subpatches are embedded.",
+    "difficulty": "medium",
+    "notes": "Key architectural concept"
+  },
+  {
+    "id": "q_018",
+    "question": "What is graph-on-parent and when should I use it?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_54"
+    ],
+    "reference_answer": "Graph-on-parent (GOP) allows a subpatch or abstraction to display its internal visual contents on the parent canvas. You enable it in the subpatch's properties dialog by checking 'graph on parent'. This is commonly used for GUI elements, array displays, and custom visual interfaces embedded in a patch without opening a separate window.",
+    "difficulty": "medium",
+    "notes": "Important for building custom UIs"
+  },
+  {
+    "id": "q_019",
+    "question": "How does audio and message scheduling work in Pd?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_42"
+    ],
+    "reference_answer": "Audio and message processing are interleaved in Pd. Audio processing runs every block (64 samples by default) at the sample rate. Message processing occurs between audio blocks. This means control messages can only affect audio parameters at block boundaries. The [block~] object can change block size, and [switch~] can enable/disable audio computation for subpatches to save CPU.",
+    "difficulty": "hard",
+    "notes": "Critical for understanding timing and CPU usage"
+  },
+  {
+    "id": "q_020",
+    "question": "How do I use [switch~] and [block~] to control audio processing?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_38"
+    ],
+    "reference_answer": "[switch~] turns audio computation on or off for a subpatch. When off, no audio DSP runs inside that subpatch, saving CPU. [block~] controls the block size and overlap for a subpatch's audio computation. You can use [block~ 1] for single-sample feedback loops, or increase block size for FFT operations. Both are powerful tools for optimizing and structuring Pd patches.",
+    "difficulty": "hard",
+    "notes": "Advanced audio optimization"
+  },
+  {
+    "id": "q_021",
+    "question": "What are the different message types (selectors) in Pd?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_28"
+    ],
+    "reference_answer": "Pd messages contain a selector (a symbol) followed by arguments. Common selectors include 'float' (a number), 'symbol' (a text symbol), 'bang' (trigger without data), 'list' (a list of atoms), and 'anything' (catch-all). The selector determines how the receiving object interprets the message. For example, 'bang' triggers an action, while 'float 440' sets a value.",
+    "difficulty": "easy",
+    "notes": "Foundation of Pd message system"
+  },
+  {
+    "id": "q_022",
+    "question": "How do multichannel signals work in Pd?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "msp_parent_40"
+    ],
+    "reference_answer": "As of Pd 0.54-0, signals can be multichannel. Every signal has a length equal to the block size and a channel count. Multichannel-aware objects like [dac~] can handle multiple channels natively. You can use [snake~] and [unsnake~] to combine/split multichannel signals. This enables cleaner parallel signal processing without duplicating patch cords.",
+    "difficulty": "hard",
+    "notes": "Newer Pd feature, less known"
+  },
+  {
+    "id": "q_023",
+    "question": "How do I create a simple oscillator patch that outputs sound?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_158",
+      "iem_parent_43",
+      "msp_parent_36"
+    ],
+    "reference_answer": "Create an [osc~ 440] object and connect it to [dac~]. The [osc~] generates a 440 Hz cosine wave, and [dac~] sends it to your sound card. Make sure DSP is turned on (check the Pd console). You can change the frequency by sending a float to [osc~]'s inlet.",
+    "difficulty": "easy",
+    "notes": "The 'hello world' of Pd audio"
+  },
+  {
+    "id": "q_024",
+    "question": "I'm using [osc~] and I can't hear anything from [dac~]. What did I forget?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_158",
+      "iem_parent_43",
+      "msp_parent_36"
+    ],
+    "reference_answer": "Common issues: (1) DSP is not turned on \u2014 check the Pd console for the DSP toggle or send 'pd dsp 1'. (2) [osc~] output isn't connected to [dac~]. (3) [dac~] doesn't have enough channels specified \u2014 try [dac~ 1] for mono. (4) Your audio settings might be misconfigured \u2014 check Preferences > Audio Settings. (5) The frequency might be too low or high to hear.",
+    "difficulty": "easy",
+    "notes": "Common beginner troubleshooting"
+  },
+  {
+    "id": "q_025",
+    "question": "How do I make ADSR envelope for a synthesizer in Pd?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_110",
+      "msp_parent_37"
+    ],
+    "reference_answer": "Use [line~] with [vline~] or [line] to create an ADSR envelope. Send attack-decay-sustain-release values as a list. Alternatively, use [adsr] or [envgen] externals. Multiply the envelope signal with your oscillator output using [*~] to shape the amplitude.",
+    "difficulty": "medium",
+    "notes": "Common patching pattern"
+  },
+  {
+    "id": "q_026",
+    "question": "How do I use [snapshot~] to read audio for visualization?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_221",
+      "msp_parent_37"
+    ],
+    "reference_answer": "Connect the audio signal you want to read to [snapshot~]'s right inlet. Use [metro] to send periodic bangs to [snapshot~]'s left inlet. Each bang outputs the current signal value as a float. You can then connect this to [table] for waveform display or use it for meter visualization.",
+    "difficulty": "medium",
+    "notes": "Bridges audio and control domains"
+  },
+  {
+    "id": "q_027",
+    "question": "How do I use that?",
+    "history": [
+      {
+        "role": "user",
+        "content": "What object should I use to change volume smoothly?"
+      },
+      {
+        "role": "assistant",
+        "content": "You can use [line~] for smooth audio ramps. Send a target value to its left inlet and a ramp time in milliseconds to its right inlet."
+      }
+    ],
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_110"
+    ],
+    "reference_answer": "To use [line~], connect it between your audio source and [dac~]. Always send the ramp time to the right inlet FIRST, then the target value to the left inlet. The right inlet doesn't remember old values, so you must send time before value each time.",
+    "difficulty": "medium",
+    "notes": "Multi-turn: deictic reference resolution"
+  },
+  {
+    "id": "q_028",
+    "question": "And what about doing this for control-rate signals instead?",
+    "history": [
+      {
+        "role": "user",
+        "content": "How do I smooth out value changes in Pd?"
+      },
+      {
+        "role": "assistant",
+        "content": "[line~] is great for smoothing audio-rate signals. You send target and ramp time and it interpolates smoothly."
+      }
+    ],
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_110",
+      "msp_parent_37"
+    ],
+    "reference_answer": "For control-rate smoothing, use [line] (without tilde) instead of [line~]. [line] takes a target value and ramp time and outputs interpolated float values. You can also use [lop~] or [vline~] for different smoothing behaviors. The key difference is [line] outputs discrete floats at message rate, while [line~] outputs continuous audio signals.",
+    "difficulty": "medium",
+    "notes": "Multi-turn follow-up about control vs audio rate"
+  },
+  {
+    "id": "q_029",
+    "question": "How do I create a band-pass filter using Pd objects?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_266"
+    ],
+    "reference_answer": "Use [vcf~] (voltage-controlled filter) to create band-pass and low-pass filtering. Connect your audio signal to the first inlet and a frequency value to the second inlet. The left outlet outputs the band-pass filtered signal. You can also use [bp~] for a simpler band-pass filter, or cascade multiple filters for steeper slopes.",
+    "difficulty": "medium",
+    "notes": "Practical audio processing task"
+  },
+  {
+    "id": "q_030",
+    "question": "How do I send non-local signals between different canvases in Pd?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "msp_parent_39"
+    ],
+    "reference_answer": "Pd provides [send~] and [receive~] for non-local signal connections between different windows or canvases. Name the send/receive pair (e.g. [send~ mysignal] and [receive~ mysignal]). For feedback, use [send~] and [receive~] in different subpatches. For control messages, use [send] and [receive] without tilde. You can also use [throw~]/[catch~] for more advanced routing.",
+    "difficulty": "medium",
+    "notes": "Practical signal routing pattern"
+  }
+]

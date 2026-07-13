@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests that require API calls (deselect with '-m \"not slow\"')",
+]
