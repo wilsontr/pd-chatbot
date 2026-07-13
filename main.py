@@ -13,7 +13,7 @@ from typing import List, Literal, Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from rag import _response_cache, async_stream_chat
+from rag import _response_cache, async_stream_chat, _langfuse
 
 # --- Rate limiter ---
 # Behind Vercel's edge all requests arrive from a Vercel datacenter IP, so
@@ -30,6 +30,12 @@ limiter = Limiter(key_func=_get_real_ip)
 app = FastAPI(title="Pd Documentation Assistant")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if _langfuse is not None:
+        _langfuse.flush()
 
 # --- CORS ---
 ALLOWED_ORIGIN = os.environ["ALLOWED_ORIGIN"]

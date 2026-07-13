@@ -14,12 +14,62 @@ load_dotenv()
 import voyageai
 from rank_bm25 import BM25Okapi
 import anthropic
+from langfuse import get_client as _get_langfuse
 
 logger = logging.getLogger(__name__)
 
 # Type aliases for the dict shapes that flow through the pipeline
 HistoryItem = dict[str, str]   # {"role": "user"|"assistant", "content": str}
 Chunk = dict[str, Any]         # parent chunk from parent_lookup
+
+# --- Langfuse observability (LLM-native tracing) ---
+try:
+    _langfuse = _get_langfuse()
+    if not _langfuse.auth_check():
+        _langfuse = None
+except Exception:
+    _langfuse = None
+if _langfuse is None:
+    logger.info("langfuse not configured — LLM tracing disabled")
+else:
+    logger.info("langfuse connected")
+
+
+class _NoopObs:
+    """Stand-in when Langfuse is unavailable. Supports update/end/__enter__/__exit__."""
+
+    def update(self, **kwargs: Any) -> None: pass
+    def end(self) -> None: pass
+    def __enter__(self) -> "_NoopObs": return self
+    def __exit__(self, *a: Any) -> None: pass
+
+
+def _start_obs(name: str, as_type: str = "span", **kwargs: Any) -> Any:
+    if _langfuse is None:
+        return _NoopObs()
+    return _langfuse.start_observation(as_type=as_type, name=name, **kwargs)
+
+
+def _start_obs_ctx(name: str, as_type: str = "span", **kwargs: Any) -> Any:
+    """Context-manager observation; sets as current for nested-child propagation."""
+    if _langfuse is None:
+        return _NoopObs()
+    return _langfuse.start_as_current_observation(as_type=as_type, name=name, **kwargs)
+
+
+def _token_usage(resp: Any) -> dict[str, int] | None:
+    """Extract token counts from an Anthropic response (sync or stream final)."""
+    try:
+        u = resp.usage
+        return {
+            "input": u.input_tokens,
+            "output": u.output_tokens,
+            "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+            "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0,
+            "total": u.input_tokens + u.output_tokens,
+        }
+    except Exception:
+        return None
 
 _response_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=3600)
 _cache_lock = threading.Lock()
@@ -92,18 +142,22 @@ def _compress_history(history: list[HistoryItem]) -> list[HistoryItem]:
         f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content'][:400]}"
         for m in old
     )
-    with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
-        resp = llm.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=200,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Summarize this Pure Data chatbot conversation in 2-3 sentences, "
-                    "capturing key topics and important context:\n\n" + old_text
-                )
-            }]
-        )
+    obs = _start_obs_ctx("compress_history", as_type="generation",
+                         model="claude-haiku-4-5", input=old_text[:500])
+    with obs as gen:
+        with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
+            resp = llm.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=200,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Summarize this Pure Data chatbot conversation in 2-3 sentences, "
+                        "capturing key topics and important context:\n\n" + old_text
+                    )
+                }]
+            )
+        gen.update(output=resp.content[0].text, usage_details=_token_usage(resp))
     summary = resp.content[0].text.strip()
     logger.info("compressed %d history items into summary", len(old))
 
@@ -141,26 +195,30 @@ Respond in JSON with these fields:
 
 Return only the JSON object, no other text."""
 
-    with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
-        response = llm.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=200,
-            messages=[{"role": "user", "content": prompt}]
-        )
-    raw = response.content[0].text.strip()
-    # Strip markdown code fences if the model wraps JSON in ```json ... ```
-    raw = re.sub(r'^```(?:json)?\s*\n', '', raw)
-    raw = re.sub(r'\n```\s*$', '', raw)
-    raw = raw.strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("classify_query returned unparseable JSON: %r", raw)
-        return {
-            "rewritten_query": question,
-            "query_type": "both",
-            "object_names": []
-        }
+    obs_cm = _start_obs_ctx("classify_query", as_type="generation",
+                            model="claude-haiku-4-5", input=question)
+    with obs_cm as obs:
+        with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
+            response = llm.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}]
+            )
+        raw = response.content[0].text.strip()
+        raw = re.sub(r'^```(?:json)?\s*\n', '', raw)
+        raw = re.sub(r'\n```\s*$', '', raw)
+        raw = raw.strip()
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("classify_query returned unparseable JSON: %r", raw)
+            result = {
+                "rewritten_query": question,
+                "query_type": "both",
+                "object_names": []
+            }
+        obs.update(output=result, usage_details=_token_usage(response))
+    return result
 
 
 def vector_search(
@@ -294,44 +352,56 @@ def retrieve(question: str, history: list[HistoryItem] | None = None) -> tuple[l
     query_type = classification["query_type"]
     object_names = classification.get("object_names", [])
 
-    # Compute query embedding once; reused across all vector_search calls below.
-    with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
-        query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
+    obs_cm = _start_obs_ctx("retrieve", as_type="span",
+                            input=question,
+                            metadata={"rewritten_query": query, "query_type": query_type,
+                                      "object_names": object_names})
 
-    if query_type == "object_reference":
-        return hybrid_retrieve(
-            query,
-            content_type="object_reference",
-            object_names=object_names,
-            bm25_query=question,
-            query_vector=query_vector,
-        ), classification
+    with obs_cm as obs:
+        # Compute query embedding once; reused across all vector_search calls below.
+        with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
+            query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
 
-    elif query_type == "conceptual":
-        return hybrid_retrieve(
-            query,
-            content_type="conceptual",
-            bm25_query=question,
-            query_vector=query_vector,
-        ), classification
+        if query_type == "object_reference":
+            chunks = hybrid_retrieve(
+                query,
+                content_type="object_reference",
+                object_names=object_names,
+                bm25_query=question,
+                query_vector=query_vector,
+            )
+        elif query_type == "conceptual":
+            chunks = hybrid_retrieve(
+                query,
+                content_type="conceptual",
+                bm25_query=question,
+                query_vector=query_vector,
+            )
+        else:  # "both"
+            obj_results = hybrid_retrieve(
+                query,
+                top_k=3,
+                content_type="object_reference",
+                object_names=object_names,
+                bm25_query=question,
+                query_vector=query_vector,
+            )
+            conceptual_results = hybrid_retrieve(
+                query,
+                top_k=3,
+                content_type="conceptual",
+                bm25_query=question,
+                query_vector=query_vector,
+            )
+            chunks = obj_results + conceptual_results
 
-    else:  # "both"
-        obj_results = hybrid_retrieve(
-            query,
-            top_k=3,
-            content_type="object_reference",
-            object_names=object_names,
-            bm25_query=question,
-            query_vector=query_vector,
+        obs.update(
+            output={"chunk_count": len(chunks),
+                    "headings": [c.get("heading_path", "")[:120] for c in chunks[:5]]},
+            metadata={"query_type": query_type, "object_names": object_names,
+                      "chunk_sources": [c.get("source", "") for c in chunks[:5]]},
         )
-        conceptual_results = hybrid_retrieve(
-            query,
-            top_k=3,
-            content_type="conceptual",
-            bm25_query=question,
-            query_vector=query_vector,
-        )
-        return obj_results + conceptual_results, classification
+    return chunks, classification
 
 
 def _build_chat_messages(
@@ -388,18 +458,33 @@ def generate_response(question: str, context_chunks: list[Chunk], history: list[
     if history is None:
         history = []
     system_block, messages = _build_chat_messages(question, context_chunks, history)
-    response = llm.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        system=system_block,
-        messages=messages
-    )
+    obs_cm = _start_obs_ctx("generate_response", as_type="generation",
+                            model="claude-sonnet-4-6",
+                            input=question,
+                            metadata={"chunk_count": len(context_chunks)})
+    with obs_cm as obs:
+        response = llm.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=system_block,
+            messages=messages
+        )
+        obs.update(output=response.content[0].text, usage_details=_token_usage(response))
     return response.content[0].text
 
 
 @newrelic.agent.function_trace()
-async def _async_generate_response_stream(question: str, context_chunks: list[Chunk], history: list[HistoryItem]):
-    """Async generator that yields text chunks from the Claude streaming API."""
+async def _async_generate_response_stream(
+    question: str,
+    context_chunks: list[Chunk],
+    history: list[HistoryItem],
+    _usage_capture: list[Any] | None = None,
+):
+    """Async generator that yields text chunks from the Claude streaming API.
+
+    If _usage_capture is a list, the final message's usage object is appended
+    to it after the stream completes, so callers can read token counts.
+    """
     system_block, messages = _build_chat_messages(question, context_chunks, history)
     with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
         async with async_llm.messages.stream(
@@ -410,6 +495,9 @@ async def _async_generate_response_stream(question: str, context_chunks: list[Ch
         ) as stream:
             async for text in stream.text_stream:
                 yield text
+            final = await stream.get_final_message()
+            if _usage_capture is not None:
+                _usage_capture.append(final.usage)
 
 
 async def async_stream_chat(question: str, history: list[HistoryItem] | None = None):
@@ -417,58 +505,78 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
     if history is None:
         history = []
 
-    history = await asyncio.to_thread(_compress_history, history)
+    root = _start_obs("chat", as_type="span", input=question,
+                      metadata={"history_turns": len(history) // 2})
 
-    key = _make_cache_key(question)
-    with _cache_lock:
-        hit = _response_cache.get(key)
+    try:
+        history = await asyncio.to_thread(_compress_history, history)
 
-    if hit is not None:
-        newrelic.agent.record_custom_metric('Custom/Cache/Hit', 1)
-        logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
-        answer, chunks, classification, extend = hit
-        new_history = (
-            history + [
-                {"role": "user", "content": question},
-                {"role": "assistant", "content": _strip_patch_blocks(answer)},
-            ]
-            if extend else history
-        )
-        yield {"type": "meta", "sources": _chunks_to_sources(chunks), "query_type": classification["query_type"]}
-        yield {"type": "chunk", "text": answer}
-        yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
-        return
-
-    newrelic.agent.record_custom_metric('Custom/Cache/Miss', 1)
-    logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
-    context_chunks, classification = await asyncio.to_thread(retrieve, question, history)
-
-    if not context_chunks:
-        answer = (
-            "I couldn't find any relevant Pure Data documentation for that question. "
-            "Try asking about a specific Pd object, patching concept, or audio technique."
-        )
+        key = _make_cache_key(question)
         with _cache_lock:
-            _response_cache[key] = (answer, [], classification, False)
-        yield {"type": "meta", "sources": [], "query_type": classification["query_type"]}
-        yield {"type": "chunk", "text": answer}
-        yield {"type": "done", "history": history}
-        return
+            hit = _response_cache.get(key)
 
-    yield {"type": "meta", "sources": _chunks_to_sources(context_chunks), "query_type": classification["query_type"]}
+        if hit is not None:
+            newrelic.agent.record_custom_metric('Custom/Cache/Hit', 1)
+            logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
+            answer, chunks, classification, extend = hit
+            new_history = (
+                history + [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": _strip_patch_blocks(answer)},
+                ]
+                if extend else history
+            )
+            root.update(output=answer[:500], metadata={"cache": "hit"})
+            yield {"type": "meta", "sources": _chunks_to_sources(chunks), "query_type": classification["query_type"]}
+            yield {"type": "chunk", "text": answer}
+            yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
+            return
 
-    full_text = ""
-    async for text in _async_generate_response_stream(question, context_chunks, history):
-        full_text += text
-        yield {"type": "chunk", "text": text}
+        newrelic.agent.record_custom_metric('Custom/Cache/Miss', 1)
+        logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
+        context_chunks, classification = await asyncio.to_thread(retrieve, question, history)
 
-    new_history = history + [
-        {"role": "user", "content": question},
-        {"role": "assistant", "content": _strip_patch_blocks(full_text)},
-    ]
-    with _cache_lock:
-        _response_cache[key] = (full_text, context_chunks, classification, True)
-    yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
+        if not context_chunks:
+            answer = (
+                "I couldn't find any relevant Pure Data documentation for that question. "
+                "Try asking about a specific Pd object, patching concept, or audio technique."
+            )
+            with _cache_lock:
+                _response_cache[key] = (answer, [], classification, False)
+            root.update(output=answer, metadata={"retrieved_chunks": 0, "cache": "miss"})
+            yield {"type": "meta", "sources": [], "query_type": classification["query_type"]}
+            yield {"type": "chunk", "text": answer}
+            yield {"type": "done", "history": history}
+            return
+
+        yield {"type": "meta", "sources": _chunks_to_sources(context_chunks), "query_type": classification["query_type"]}
+
+        gen = _start_obs("generate_response", as_type="generation",
+                         model="claude-sonnet-4-6",
+                         input=question,
+                         metadata={"chunk_count": len(context_chunks)})
+        full_text = ""
+        usage_capture: list[Any] = []
+        async for text in _async_generate_response_stream(question, context_chunks, history, _usage_capture=usage_capture):
+            full_text += text
+            yield {"type": "chunk", "text": text}
+        if usage_capture:
+            gen.update(output=full_text[:500], usage_details=_token_usage(usage_capture[0]))
+        gen.end()
+
+        new_history = history + [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": _strip_patch_blocks(full_text)},
+        ]
+        with _cache_lock:
+            _response_cache[key] = (full_text, context_chunks, classification, True)
+        root.update(output=full_text[:500], metadata={"retrieved_chunks": len(context_chunks),
+                                                      "query_type": classification["query_type"],
+                                                      "cache": "miss"})
+        yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
+
+    finally:
+        root.end()
 
 
 def _strip_patch_blocks(text: str) -> str:
@@ -487,43 +595,50 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
     if history is None:
         history = []
 
-    history = _compress_history(history)
+    with _start_obs_ctx("chat", as_type="span", input=question,
+                        metadata={"history_turns": len(history) // 2}) as root:
+        history = _compress_history(history)
 
-    key = _make_cache_key(question)
-    with _cache_lock:
-        hit = _response_cache.get(key)
-
-    if hit is not None:
-        logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
-        answer, chunks, classification, extend = hit
-        new_history = (
-            history + [
-                {"role": "user", "content": question},
-                {"role": "assistant", "content": _strip_patch_blocks(answer)},
-            ]
-            if extend else history
-        )
-        return answer, chunks, classification, new_history
-
-    logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
-    context_chunks, classification = retrieve(question, history)
-    if not context_chunks:
-        answer = (
-            "I couldn't find any relevant Pure Data documentation for that question. "
-            "Try asking about a specific Pd object, patching concept, or audio technique."
-        )
+        key = _make_cache_key(question)
         with _cache_lock:
-            _response_cache[key] = (answer, [], classification, False)
-        return answer, [], classification, history
+            hit = _response_cache.get(key)
 
-    answer = generate_response(question, context_chunks, history)
-    new_history = history + [
-        {"role": "user", "content": question},
-        {"role": "assistant", "content": _strip_patch_blocks(answer)},
-    ]
-    with _cache_lock:
-        _response_cache[key] = (answer, context_chunks, classification, True)
-    return answer, context_chunks, classification, new_history
+        if hit is not None:
+            logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
+            answer, chunks, classification, extend = hit
+            new_history = (
+                history + [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": _strip_patch_blocks(answer)},
+                ]
+                if extend else history
+            )
+            root.update(output=answer[:500], metadata={"cache": "hit"})
+            return answer, chunks, classification, new_history
+
+        logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
+        context_chunks, classification = retrieve(question, history)
+        if not context_chunks:
+            answer = (
+                "I couldn't find any relevant Pure Data documentation for that question. "
+                "Try asking about a specific Pd object, patching concept, or audio technique."
+            )
+            with _cache_lock:
+                _response_cache[key] = (answer, [], classification, False)
+            root.update(output=answer, metadata={"retrieved_chunks": 0, "cache": "miss"})
+            return answer, [], classification, history
+
+        answer = generate_response(question, context_chunks, history)
+        new_history = history + [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": _strip_patch_blocks(answer)},
+        ]
+        with _cache_lock:
+            _response_cache[key] = (answer, context_chunks, classification, True)
+        root.update(output=answer[:500], metadata={"retrieved_chunks": len(context_chunks),
+                                                    "query_type": classification["query_type"],
+                                                    "cache": "miss"})
+        return answer, context_chunks, classification, new_history
 
 
 def main():
