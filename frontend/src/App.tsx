@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, FormEvent, KeyboardEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Separator } from '@/components/ui/separator'
 import { useChat } from './hooks/useChat'
 import { useInputHistory } from './hooks/useInputHistory'
 import { MessageBubble } from './components/MessageBubble'
@@ -67,10 +66,13 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      <header className="border-b px-6 py-4 shrink-0">
+      <header className="border-b-2 border-[#707070] dark:border-[#3a3a3a] bg-[#909090] dark:bg-[#2a2a2a] px-6 py-4 shrink-0">
         <h1 className="text-base font-semibold tracking-tight">Pd Documentation Assistant</h1>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Pure Data objects, patching concepts, and audio signal processing
+          Pure Data objects, patching concepts, and audio signal processing. Built by Trevor Wilson. 
+          &nbsp;
+          <a href="https://github.com/wilsontr/pd-chatbot" target="_blank" rel="noreferrer" 
+          className="underline underline-offset-2 hover:text-muted-foreground transition-colors">GitHub repository</a> 
         </p>
       </header>
 
@@ -96,9 +98,7 @@ export default function App() {
         </div>
       </ScrollArea>
 
-      <Separator />
-
-      <form onSubmit={handleSubmit} className="px-4 py-3 shrink-0">
+      <form onSubmit={handleSubmit} className="border-t-2 border-[#707070] dark:border-[#3a3a3a] bg-[#909090] dark:bg-[#2a2a2a] px-4 py-3 shrink-0">
         <div className="max-w-[816px] mx-auto flex items-end gap-2">
           <Textarea
             ref={textareaRef}
