@@ -52,13 +52,62 @@ Retrieved chunks are passed as context to Claude Sonnet, which streams a respons
 
 - Inline `[object~]` references in code spans
 - Markdown tables for structured object comparisons
-- **Pd patch diagrams** — when a concrete signal chain is described, the model emits a `pd-patch` JSON block that the frontend renders as an SVG diagram matching the Pd editor's visual style
+- **Pd patch diagrams** — when a concrete signal chain is described, the model emits a `pd-patch` JSON block that the frontend renders as an SVG diagram matching the Pd editor's visual style. Patch JSON is validated server-side with Pydantic and retried on failure (see [Quality](#quality)).
 
 The SVG renderer supports all standard Pd box types: `obj` (rectangle), `msg` (notched right edge), `floatatom` (corner-cut number box), `comment` (text label), `table`/`array` (named data stores), and UI widgets (`bng`, `tgl`, `hsl`, `vsl`, etc.). Inlet and outlet nubs and patch cords are drawn automatically; layout is computed with [dagre](https://github.com/dagrejs/dagre).
 
 ### Caching
 
 Responses are cached in-process (`cachetools.TTLCache`, 1-hour TTL, keyed by normalised question) so repeated queries return immediately without re-running retrieval or generation. Cache hits are flushed as a single SSE burst.
+
+## Evaluation
+
+A 30-entry golden dataset and automated evaluation harness measure retrieval
+quality and guard against regressions.
+
+| Strategy | recall@5 | MRR |
+|----------|----------|-----|
+| Hybrid RRF | 80% | 0.76 |
+| Vector-only | 73% | 0.61 |
+| BM25-only | 37% | 0.26 |
+
+Current numbers are published in **[EVAL.md](EVAL.md)**, updated on every push to
+`main` by a GitHub Actions workflow.
+
+**Retrieval metrics**: recall@k, MRR, nDCG — with ablation against
+vector-only and BM25-only baselines to prove hybrid RRF wins.
+
+**Generation metrics**: faithfulness, answer relevance, and citation
+correctness scored by a Claude-as-judge rubric (LLM-as-judge).
+
+**CI gating**: `pytest tests/` asserts thresholds (recall@5 ≥ 60%, MRR ≥
+0.30, hybrid ≥ both baselines). Runs on every PR and push.
+
+## Quality
+
+### pd-patch validation
+
+Patch diagram JSON is validated server-side with Pydantic (`pd_schema.py`).
+If a block fails validation in the synchronous `chat()` path, the answer is
+retried once with a correction prompt. The streaming path replaces malformed
+blocks with a `[patch diagram]` placeholder. Parse failures are tracked via
+New Relic (`Custom/PdPatch/ParseFailure`) and Langfuse (`pd_patch_valid`
+score).
+
+### Feedback loop
+
+Every assistant response carries a `message_id` (SHA-256 of the question).
+Thumbs up/down buttons in the chat UI submit cryptographically-signed
+feedback (`POST /feedback`) to a SQLite store, capturing the question,
+answer, retrieved chunks, and rating. The data grows an eval set from real
+usage.
+
+### API auth
+
+The backend accepts multiple API keys (`CHAT_API_KEYS`, comma-separated in
+env), enabling zero-downtime rotation. The `/feedback` endpoint additionally
+requires an HMAC-SHA256 signature over the payload, preventing replay attacks
+(60-second window).
 
 ## Stack
 
@@ -68,8 +117,10 @@ Responses are cached in-process (`cachetools.TTLCache`, 1-hour TTL, keyed by nor
 - [Voyage AI](https://www.voyageai.com/) — embeddings (`voyage-3-lite`)
 - [Anthropic Claude](https://www.anthropic.com/) — classification (`claude-haiku-4-5`) + generation (`claude-sonnet-4-6`)
 - [rank-bm25](https://github.com/dorianbrown/rank_bm25) — keyword search
-- slowapi — rate limiting (10 requests/minute per IP)
-- New Relic APM — request tracing, external call instrumentation (Anthropic, Voyage AI), cache hit/miss metrics
+- slowapi — rate limiting (10/min `/chat`, 30/min `/feedback`)
+- New Relic APM — request tracing, external call instrumentation (Anthropic, Voyage AI), cache hit/miss metrics, pd-patch validation failure tracking
+- [Langfuse](https://langfuse.com) (self-hosted on Railway) — LLM-native tracing: token accounting (input/output/cache-read), trace trees (classify → embed → retrieve → generate), cost attribution
+- SQLite (`feedback.db`) — feedback store, no additional dependencies
 
 **Frontend**
 - React 19 + TypeScript + Vite
@@ -90,6 +141,18 @@ The application is deployed as two separate services:
 The Vercel deployment rewrites `/api/*` to the Railway backend URL server-side, so the browser never makes cross-origin requests and CORS is not required for production.
 
 Railway runs `embed_and_index.py` as part of the build step to construct ChromaDB from the committed chunk files (`child_chunks.json`, `parent_chunks.json`). ChromaDB itself is not committed — it is rebuilt on each deploy.
+
+### CI/CD
+
+A [GitHub Actions workflow](.github/workflows/eval.yml) runs on every push and
+PR:
+
+1. Builds ChromaDB from committed chunk files
+2. Runs the retrieval evaluation (recall@k, MRR, nDCG) and writes `EVAL.md`
+3. Auto-commits `EVAL.md` to `main` (skips on PRs)
+4. Runs `pytest tests/` with threshold assertions
+
+Requires `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY` set as [repository secrets](https://github.com/wilsontr/pd-chatbot/settings/secrets/actions).
 
 ## Setup
 
@@ -113,8 +176,12 @@ Create a `.env` file:
 ```
 VOYAGE_API_KEY=...
 ANTHROPIC_API_KEY=...
-CHAT_API_KEY=...          # shared secret for the /chat endpoint
+CHAT_API_KEYS=...            # comma-separated for rotation; e.g. "key1,key2"
 ALLOWED_ORIGIN=http://localhost:5173
+# Optional — Langfuse LLM observability
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_BASE_URL=http://localhost:3000
 ```
 
 ### Build the corpus
@@ -150,7 +217,10 @@ The frontend proxies `/api` to `http://localhost:8000` (configured in `vite.conf
 
 ### Observability (optional)
 
-New Relic instrumentation is included but inactive without credentials. To enable:
+There are two layers:
+
+**New Relic APM** — request tracing, external call instrumentation, custom
+metrics. Inactive without credentials. To enable:
 
 **Backend (Railway env vars):**
 ```
@@ -168,3 +238,15 @@ VITE_NR_ACCOUNT_ID=...
 ```
 
 The Railway start command (`railway.json`) uses `newrelic-admin run-program` to bootstrap the Python APM agent. The frontend initialises `BrowserAgent` in `src/main.jsx`, guarded by `VITE_NR_LICENSE_KEY` so local dev without credentials is unaffected.
+
+**Langfuse** (LLM-native tracing) — token counts, trace trees, cost attribution.
+Self-hosted on Railway via the [Langfuse v3 template](https://langfuse.com/self-hosting/deployment/railway).
+Set these env vars on the backend:
+
+```
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_BASE_URL=https://langfuse-web-production-xxxx.up.railway.app
+```
+
+When unset, the system degrades gracefully — all observations become no-ops.
