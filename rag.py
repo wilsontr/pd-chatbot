@@ -15,6 +15,7 @@ import voyageai
 from rank_bm25 import BM25Okapi
 import anthropic
 from langfuse import get_client as _get_langfuse
+from pd_schema import PdPatch
 
 logger = logging.getLogger(__name__)
 
@@ -497,7 +498,7 @@ async def _async_generate_response_stream(
                 yield text
             final = await stream.get_final_message()
             if _usage_capture is not None:
-                _usage_capture.append(final.usage)
+                _usage_capture.append(final)
 
 
 async def async_stream_chat(question: str, history: list[HistoryItem] | None = None):
@@ -564,6 +565,14 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
             gen.update(output=full_text[:500], usage_details=_token_usage(usage_capture[0]))
         gen.end()
 
+        full_text, patch_failed = _validate_and_canonicalize_blocks(full_text)
+        if patch_failed:
+            if _langfuse is not None:
+                try:
+                    _langfuse.score_current_span(name="pd_patch_valid", value=0)
+                except Exception:
+                    pass
+
         new_history = history + [
             {"role": "user", "content": question},
             {"role": "assistant", "content": _strip_patch_blocks(full_text)},
@@ -588,6 +597,71 @@ def _strip_patch_blocks(text: str) -> str:
     # Strip truncated blocks — no closing fence, runs to end of string
     text = re.sub(r'```pd-patch\b.*', '[patch diagram]', text, flags=re.DOTALL)
     return text.strip()
+
+
+# --- pd-patch structured validation -------------------------------------------------
+# The LLM emits patch diagrams as fenced ```pd-patch JSON blocks inside its prose.
+# These helpers extract, validate (Pydantic), and canonicalize those blocks, replacing
+# malformed ones with a placeholder. The sync chat() path retries on failure.
+
+_PATCH_FENCE_RE = re.compile(r'```pd-patch\b\n?(.*?)```', re.DOTALL)
+
+_RETRY_PROMPT = """Your previous response contained a pd-patch code block with invalid JSON.
+
+Please fix the pd-patch JSON block to match this exact schema:
+```json
+{
+  "objects": [{"id": "str", "type": "obj|msg|floatatom|comment", "text": "str", "inlets": int, "outlets": int}],
+  "connections": [{"srcId": "str", "srcOutlet": int, "dstId": "str", "dstInlet": int}]
+}
+```
+
+Rules:
+- objects array: 1-15 items, each with id, type (one of obj/msg/floatatom/comment), text, inlets (>=0), outlets (>=0)
+- connections array: unlimited, each with srcId, srcOutlet (>=0), dstId, dstInlet (>=0)
+- All id references in connections must match object ids
+
+Do not change the rest of your answer. Only fix the pd-patch JSON block."""
+
+
+def _extract_pd_patches(text: str) -> list[tuple[str, str]]:
+    """Return list of (raw_json, full_fenced_block) for each pd-patch block."""
+    return [(m.group(1).strip(), m.group(0)) for m in _PATCH_FENCE_RE.finditer(text)]
+
+
+def _validate_patch(raw_json: str) -> PdPatch | None:
+    """Parse and validate a pd-patch JSON block. Returns PdPatch or None."""
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError as e:
+        logger.warning("pd-patch JSON parse error: %s", e)
+        return None
+    try:
+        return PdPatch.model_validate(data)
+    except Exception as e:
+        logger.warning("pd-patch schema validation failed: %s", e)
+        return None
+
+
+def _validate_and_canonicalize_blocks(text: str) -> tuple[str, bool]:
+    """Extract pd-patch blocks, validate each, replace with canonical JSON or placeholder.
+
+    Returns (processed_text, had_failure).
+    Tracks parse failures via New Relic custom metric.
+    """
+    had_failure = False
+    result = text
+    for raw_json, full_block in _extract_pd_patches(text):
+        patch = _validate_patch(raw_json)
+        if patch is not None:
+            canonical = json.dumps(patch.model_dump(), separators=(",", ":"), ensure_ascii=False)
+            replacement = f"```pd-patch\n{canonical}\n```"
+        else:
+            had_failure = True
+            newrelic.agent.record_custom_metric("Custom/PdPatch/ParseFailure", 1)
+            replacement = "[patch diagram]"
+        result = result.replace(full_block, replacement, 1)
+    return result, had_failure
 
 
 def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, list[Chunk], dict, list[HistoryItem]]:
@@ -629,6 +703,24 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
             return answer, [], classification, history
 
         answer = generate_response(question, context_chunks, history)
+        answer, patch_failed = _validate_and_canonicalize_blocks(answer)
+        if patch_failed:
+            logger.info("pd-patch validation failed — retrying")
+            newrelic.agent.record_custom_metric("Custom/PdPatch/Retry", 1)
+            retry_answer = generate_response(_RETRY_PROMPT, context_chunks, history + [
+                {"role": "assistant", "content": answer},
+            ])
+            retry_answer, retry_failed = _validate_and_canonicalize_blocks(retry_answer)
+            if retry_failed:
+                logger.warning("pd-patch retry also failed")
+            else:
+                patch_failed = False
+            answer = retry_answer
+        if patch_failed and _langfuse is not None:
+            try:
+                root.update(metadata={"pd_patch_valid": False})
+            except Exception:
+                pass
         new_history = history + [
             {"role": "user", "content": question},
             {"role": "assistant", "content": _strip_patch_blocks(answer)},
