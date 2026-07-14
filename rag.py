@@ -506,6 +506,15 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
     if history is None:
         history = []
 
+    if _check_prompt_injection(question):
+        newrelic.agent.record_custom_metric("Custom/Guard/InjectionBlocked", 1)
+        logger.warning("prompt injection blocked: %r", question[:120])
+        blocked = "I can only answer questions about Pure Data documentation. Please ask a question about Pd objects, patching concepts, or audio techniques."
+        yield {"type": "meta", "sources": [], "query_type": "conceptual"}
+        yield {"type": "chunk", "text": blocked}
+        yield {"type": "done", "history": history, "message_id": _make_cache_key(question)}
+        return
+
     root = _start_obs("chat", as_type="span", input=question,
                       metadata={"history_turns": len(history) // 2})
 
@@ -573,6 +582,10 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
                 except Exception:
                     pass
 
+        if not _check_groundedness(full_text, context_chunks):
+            newrelic.agent.record_custom_metric("Custom/Guard/GroundednessLow", 1)
+            logger.info("low groundedness (streaming) — answer may not reference source docs")
+
         new_history = history + [
             {"role": "user", "content": question},
             {"role": "assistant", "content": _strip_patch_blocks(full_text)},
@@ -586,6 +599,45 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
 
     finally:
         root.end()
+
+
+# --- Guardrails --------------------------------------------------------------------
+# Lightweight prompt-injection detection and groundedness gating.
+# These are basic heuristics, not a security boundary — the system prompt already
+# constrains the model to prefer documentation. These checks detect the most
+# common attack patterns and flag ungrounded responses for observability.
+
+_INJECTION_PATTERNS = [
+    re.compile(r"ignore\s+(all\s+)?(previous|prior|above|the)\s+(instructions?|prompts?|rules?|directives?)", re.IGNORECASE),
+    re.compile(r"you\s+are\s+(now\s+|no\s+longer\s+)?(a\s+|an\s+)?(?!.*?\bhelpful\b).{0,20}(assistant|chatbot|helper|ai)", re.IGNORECASE),
+    re.compile(r"(override|disregard|forget)\s+(your\s+)?(instructions?|prompts?|rules?|system\s+prompt|guidelines?)", re.IGNORECASE),
+    re.compile(r"system\s+(prompt|message|instruction)", re.IGNORECASE),
+    re.compile(r"(DAN|jailbreak|roleplay|developer\s*mode)", re.IGNORECASE),
+    re.compile(r"from\s+now\s+on\s+you\s+(are|will|must|should)", re.IGNORECASE),
+    re.compile(r"(do\s+not|don't|never)\s+(follow|obey|use|reference)\s+(your\s+)?(instructions?|prompts?|rules?)", re.IGNORECASE),
+]
+
+def _check_prompt_injection(question: str) -> bool:
+    """Return True if the question contains known prompt-injection patterns."""
+    return any(p.search(question) for p in _INJECTION_PATTERNS)
+
+
+def _check_groundedness(answer: str, chunks: list[Chunk]) -> bool:
+    """Return True if the answer references at least one source from the provided chunks.
+
+    Checks for source URLs appearing in the answer. If no chunks were retrieved,
+    the answer is considered grounded (the failure message is explicit).
+    """
+    if not chunks:
+        return True
+    for chunk in chunks:
+        url = chunk.get("url", "")
+        if url and url in answer:
+            return True
+    return False
+
+
+""" ---------------------------------------------------------------------- """
 
 
 def _strip_patch_blocks(text: str) -> str:
@@ -669,6 +721,15 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
     if history is None:
         history = []
 
+    if _check_prompt_injection(question):
+        newrelic.agent.record_custom_metric("Custom/Guard/InjectionBlocked", 1)
+        logger.warning("prompt injection blocked: %r", question[:120])
+        return (
+            "I can only answer questions about Pure Data documentation. "
+            "Please ask a question about Pd objects, patching concepts, or audio techniques.",
+            [], {"query_type": "conceptual"}, [],
+        )
+
     with _start_obs_ctx("chat", as_type="span", input=question,
                         metadata={"history_turns": len(history) // 2}) as root:
         history = _compress_history(history)
@@ -730,6 +791,9 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
         root.update(output=answer[:500], metadata={"retrieved_chunks": len(context_chunks),
                                                     "query_type": classification["query_type"],
                                                     "cache": "miss"})
+        if not _check_groundedness(answer, context_chunks):
+            newrelic.agent.record_custom_metric("Custom/Guard/GroundednessLow", 1)
+            logger.info("low groundedness detected — answer may not reference source docs")
         return answer, context_chunks, classification, new_history
 
 
