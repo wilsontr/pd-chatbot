@@ -16,6 +16,13 @@ on:
         type: string
         default: '5'
 
+# Prevent concurrent eval runs on the same branch from racing each
+# other when auto-committing EVAL.md.  Without this, two pushes in
+# quick succession can produce a "cannot lock ref" error on push.
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   eval:
     runs-on: ubuntu-latest
