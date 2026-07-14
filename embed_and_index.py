@@ -1,6 +1,7 @@
 # embed_and_index.py
 import json
 import logging
+import os
 import time
 from dotenv import load_dotenv
 load_dotenv()
@@ -24,6 +25,9 @@ def embed_with_retry(texts: list[str], model: str, max_retries: int = 5) -> list
 
 
 def run() -> None:
+    if not os.getenv("VOYAGE_API_KEY"):
+        raise RuntimeError("VOYAGE_API_KEY environment variable is not set")
+
     with open("child_chunks.json") as f:
         child_chunks = json.load(f)
     with open("parent_chunks.json") as f:

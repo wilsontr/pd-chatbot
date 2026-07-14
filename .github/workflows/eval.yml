@@ -20,6 +20,8 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write  # needed for auto-commit of EVAL.md
 
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +35,12 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
+      - name: Build ChromaDB index (embeddings must be precomputed)
+        env:
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: |
+          python embed_and_index.py
+
       - name: Run retrieval evaluation
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -42,7 +50,7 @@ jobs:
 
       - name: Commit updated EVAL.md
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: 'ci: update evaluation results [skip ci]'
           file_pattern: EVAL.md
