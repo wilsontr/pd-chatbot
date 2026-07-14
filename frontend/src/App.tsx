@@ -66,7 +66,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      <header className="border-b-2 border-[#707070] dark:border-[#3a3a3a] bg-[#909090] dark:bg-[#2a2a2a] px-6 py-4 shrink-0">
+      <header className="border-b-2 border-[#d0d0d0] dark:border-[#3a3a3a] bg-[#f0f0f0] dark:bg-[#2a2a2a] px-6 py-4 shrink-0">
         <h1 className="text-base font-semibold tracking-tight">Pd Documentation Assistant</h1>
         <p className="text-xs text-muted-foreground mt-0.5">
           Pure Data objects, patching concepts, and audio signal processing. Built by Trevor Wilson. 
@@ -98,7 +98,7 @@ export default function App() {
         </div>
       </ScrollArea>
 
-      <form onSubmit={handleSubmit} className="border-t-2 border-[#707070] dark:border-[#3a3a3a] bg-[#909090] dark:bg-[#2a2a2a] px-4 py-3 shrink-0">
+      <form onSubmit={handleSubmit} className="border-t-2 border-[#d0d0d0] dark:border-[#3a3a3a] bg-[#f0f0f0] dark:bg-[#2a2a2a] px-4 py-3 shrink-0">
         <div className="max-w-[816px] mx-auto flex items-end gap-2">
           <Textarea
             ref={textareaRef}
@@ -109,7 +109,7 @@ export default function App() {
             disabled={loading}
             autoFocus
             rows={1}
-            className="flex-1 resize-none overflow-y-hidden max-h-[8rem] min-h-0 py-2 leading-relaxed"
+            className="flex-1 resize-none overflow-y-hidden max-h-[8rem] min-h-0 py-2 leading-relaxed bg-[#fff] dark:bg-[#1a1a1a] border-[#d0d0d0] dark:border-[#3a3a3a]"
           />
           <Button type="submit" disabled={loading || !input.trim()}>
             Send
