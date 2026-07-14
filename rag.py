@@ -519,7 +519,7 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
         if hit is not None:
             newrelic.agent.record_custom_metric('Custom/Cache/Hit', 1)
             logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
-            answer, chunks, classification, extend = hit
+            _, answer, chunks, classification, extend = hit
             new_history = (
                 history + [
                     {"role": "user", "content": question},
@@ -530,7 +530,7 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
             root.update(output=answer[:500], metadata={"cache": "hit"})
             yield {"type": "meta", "sources": _chunks_to_sources(chunks), "query_type": classification["query_type"]}
             yield {"type": "chunk", "text": answer}
-            yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
+            yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:], "message_id": key}
             return
 
         newrelic.agent.record_custom_metric('Custom/Cache/Miss', 1)
@@ -543,11 +543,11 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
                 "Try asking about a specific Pd object, patching concept, or audio technique."
             )
             with _cache_lock:
-                _response_cache[key] = (answer, [], classification, False)
+                _response_cache[key] = (question, answer, [], classification, False)
             root.update(output=answer, metadata={"retrieved_chunks": 0, "cache": "miss"})
             yield {"type": "meta", "sources": [], "query_type": classification["query_type"]}
             yield {"type": "chunk", "text": answer}
-            yield {"type": "done", "history": history}
+            yield {"type": "done", "history": history, "message_id": key}
             return
 
         yield {"type": "meta", "sources": _chunks_to_sources(context_chunks), "query_type": classification["query_type"]}
@@ -578,11 +578,11 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
             {"role": "assistant", "content": _strip_patch_blocks(full_text)},
         ]
         with _cache_lock:
-            _response_cache[key] = (full_text, context_chunks, classification, True)
+            _response_cache[key] = (question, full_text, context_chunks, classification, True)
         root.update(output=full_text[:500], metadata={"retrieved_chunks": len(context_chunks),
                                                       "query_type": classification["query_type"],
                                                       "cache": "miss"})
-        yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
+        yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:], "message_id": key}
 
     finally:
         root.end()
@@ -679,7 +679,7 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
 
         if hit is not None:
             logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
-            answer, chunks, classification, extend = hit
+            _, answer, chunks, classification, extend = hit
             new_history = (
                 history + [
                     {"role": "user", "content": question},
@@ -698,7 +698,7 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
                 "Try asking about a specific Pd object, patching concept, or audio technique."
             )
             with _cache_lock:
-                _response_cache[key] = (answer, [], classification, False)
+                _response_cache[key] = (question, answer, [], classification, False)
             root.update(output=answer, metadata={"retrieved_chunks": 0, "cache": "miss"})
             return answer, [], classification, history
 
@@ -726,7 +726,7 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
             {"role": "assistant", "content": _strip_patch_blocks(answer)},
         ]
         with _cache_lock:
-            _response_cache[key] = (answer, context_chunks, classification, True)
+            _response_cache[key] = (question, answer, context_chunks, classification, True)
         root.update(output=answer[:500], metadata={"retrieved_chunks": len(context_chunks),
                                                     "query_type": classification["query_type"],
                                                     "cache": "miss"})

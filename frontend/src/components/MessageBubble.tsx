@@ -1,8 +1,10 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PdPatchViewer } from './PdPatchViewer'
+import { submitFeedback } from '@/lib/auth'
 import type { Message } from '../types'
 import type { Components } from 'react-markdown'
 
@@ -71,6 +73,14 @@ const markdownComponents: Components = {
 
 export function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
+  const [rating, setRating] = useState<'up' | 'down' | null>(null)
+
+  async function handleFeedback(choice: 'up' | 'down') {
+    if (rating || !message.messageId) return
+    const ok = await submitFeedback(message.messageId, choice)
+    if (ok) setRating(choice)
+  }
+
   return (
     <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       <div className={`flex flex-col gap-2 max-w-[88%] ${isUser ? 'items-end' : 'items-start'}`}>
@@ -110,6 +120,33 @@ export function MessageBubble({ message }: { message: Message }) {
                 </Badge>
               </a>
             ))}
+          </div>
+        )}
+
+        {!isUser && message.messageId && message.content !== '' && (
+          <div className="flex gap-1 px-0.5">
+            <button
+              onClick={() => handleFeedback('up')}
+              className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                rating === 'up'
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+              }`}
+              title="Helpful"
+            >
+              {rating === 'up' ? '👍' : '👍'}
+            </button>
+            <button
+              onClick={() => handleFeedback('down')}
+              className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                rating === 'down'
+                  ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+              }`}
+              title="Not helpful"
+            >
+              {rating === 'down' ? '👎' : '👎'}
+            </button>
           </div>
         )}
       </div>

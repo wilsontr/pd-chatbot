@@ -10,7 +10,11 @@ parsed_book.json
 
 # ChromaDB vector index — build locally with embed_and_index.py
 chroma_db/
-chroma_db/
+
+# Feedback database — runtime artifact
+feedback.db
+feedback.db-wal
+feedback.db-shm
 
 # macOS
 .DS_Store

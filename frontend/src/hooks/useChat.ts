@@ -88,7 +88,7 @@ export function useChat() {
             // Ensure final content is raw (replaces any leftover placeholder)
             setMessages(prev => {
               const last = prev[prev.length - 1]
-              return [...prev.slice(0, -1), { ...last, content: rawContent }]
+              return [...prev.slice(0, -1), { ...last, content: rawContent, messageId: event.message_id }]
             })
             setChatHistory(event.history)
           }
