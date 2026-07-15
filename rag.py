@@ -16,6 +16,7 @@ from rank_bm25 import BM25Okapi
 import anthropic
 from langfuse import get_client as _get_langfuse
 from pd_schema import PdPatch
+from evaluation.judge import score_faithfulness
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +99,18 @@ bm25 = BM25Okapi(tokenized_corpus)
 SYSTEM_PROMPT = (
     "You are a helpful assistant that answers questions about Pure Data (Pd), "
     "a visual programming language for music and multimedia. "
-    "Use the provided documentation excerpts as your primary source. "
-    "You may draw on broader knowledge of Pd to explain concepts or suggest implementation "
-    "strategies, but ground your answer in the documentation where it is relevant. "
+    "Use the provided documentation excerpts as your primary source, and treat them as "
+    "authoritative over anything else. "
+    "Never state a specific numeric argument, default value, inlet/outlet count, or object "
+    "behavior unless it is explicitly present in the provided excerpts — if you are not sure "
+    "an excerpt covers it, say so instead of guessing. "
+    "You may draw on broader knowledge of Pd to explain general concepts or suggest "
+    "implementation strategies, but you must explicitly flag when you do so (e.g. "
+    "\"this isn't covered in the docs, but...\") rather than blending it in as if it were "
+    "documented. "
     "If the documentation contradicts general knowledge, prefer the documentation. "
+    "If the excerpts don't contain enough information to answer confidently, say so plainly "
+    "instead of filling the gap with a plausible-sounding guess. "
     "Include relevant object names and brief examples where helpful. "
     "Cite the source URLs at the end of your answer.\n\n"
     "Formatting rules:\n"
@@ -582,9 +591,23 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
                 except Exception:
                     pass
 
-        if not _check_groundedness(full_text, context_chunks):
-            newrelic.agent.record_custom_metric("Custom/Guard/GroundednessLow", 1)
-            logger.info("low groundedness (streaming) — answer may not reference source docs")
+        # Faithfulness can't gate a retry here — the answer is already streamed to the
+        # client — so on a low score we surface a visible disclaimer instead of just
+        # logging, and store the disclaimer in history/cache so it stays accurate on replay.
+        faithfulness = await asyncio.to_thread(_check_faithfulness, question, full_text, context_chunks)
+        if faithfulness is not None and (faithfulness.get("score") or 0) <= FAITHFULNESS_RETRY_THRESHOLD:
+            newrelic.agent.record_custom_metric("Custom/Guard/LowFaithfulness", 1)
+            logger.info("low faithfulness (streaming, score=%s): %s",
+                        faithfulness.get("score"), faithfulness.get("explanation"))
+            if _langfuse is not None:
+                try:
+                    _langfuse.score_current_span(name="faithfulness", value=faithfulness.get("score"))
+                except Exception:
+                    pass
+            disclaimer = ("\n\n_Note: parts of this answer may not be fully supported by the "
+                          "documentation excerpts — verify against the source docs above._")
+            full_text += disclaimer
+            yield {"type": "chunk", "text": disclaimer}
 
         new_history = history + [
             {"role": "user", "content": question},
@@ -622,19 +645,37 @@ def _check_prompt_injection(question: str) -> bool:
     return any(p.search(question) for p in _INJECTION_PATTERNS)
 
 
-def _check_groundedness(answer: str, chunks: list[Chunk]) -> bool:
-    """Return True if the answer references at least one source from the provided chunks.
+# Faithfulness score (1-5, LLM-as-judge) at or below this is treated as a real hallucination
+# risk rather than noise — see evaluation/judge.py's rubric ("major/near-total unsupported claims").
+FAITHFULNESS_RETRY_THRESHOLD = 2
 
-    Checks for source URLs appearing in the answer. If no chunks were retrieved,
-    the answer is considered grounded (the failure message is explicit).
+_FAITHFULNESS_RETRY_PROMPT = """Your previous answer contained claims that a faithfulness \
+check flagged as not supported by the provided documentation excerpts \
+(reason: {explanation}).
+
+Revise your answer:
+- Remove or qualify any claim not directly supported by the excerpts.
+- If you're not sure something is covered by the docs, say so explicitly \
+("not covered in the documentation, but...") instead of stating it as fact.
+- Keep the same formatting rules (pd-patch blocks, code spans, tables) as before.
+
+The documentation excerpts and question are unchanged from before this correction."""
+
+
+def _check_faithfulness(question: str, answer: str, chunks: list[Chunk]) -> dict[str, Any] | None:
+    """Run the LLM-as-judge faithfulness check inline (single Haiku call).
+
+    Returns the judge's {"score": int, "explanation": str} dict, or None if there was
+    nothing to check (no retrieved chunks) or the judge call itself failed — callers
+    should treat None as "skip", not as a failure.
     """
     if not chunks:
-        return True
-    for chunk in chunks:
-        url = chunk.get("url", "")
-        if url and url in answer:
-            return True
-    return False
+        return None
+    try:
+        return score_faithfulness(llm, question=question, answer=answer, context_chunks=chunks)
+    except Exception:
+        logger.warning("faithfulness judge call failed", exc_info=True)
+        return None
 
 
 """ ---------------------------------------------------------------------- """
@@ -782,6 +823,25 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
                 root.update(metadata={"pd_patch_valid": False})
             except Exception:
                 pass
+
+        faithfulness = _check_faithfulness(question, answer, context_chunks)
+        if faithfulness is not None and (faithfulness.get("score") or 0) <= FAITHFULNESS_RETRY_THRESHOLD:
+            logger.info("low faithfulness (score=%s): %s — retrying",
+                        faithfulness.get("score"), faithfulness.get("explanation"))
+            newrelic.agent.record_custom_metric("Custom/Guard/FaithfulnessRetry", 1)
+            retry_prompt = _FAITHFULNESS_RETRY_PROMPT.format(
+                explanation=faithfulness.get("explanation", "unsupported claims"))
+            retry_answer = generate_response(retry_prompt, context_chunks, history + [
+                {"role": "assistant", "content": answer},
+            ])
+            retry_answer, retry_patch_failed = _validate_and_canonicalize_blocks(retry_answer)
+            retry_faithfulness = _check_faithfulness(question, retry_answer, context_chunks)
+            if retry_faithfulness is not None and (retry_faithfulness.get("score") or 0) <= FAITHFULNESS_RETRY_THRESHOLD:
+                logger.warning("faithfulness retry still low (score=%s)", retry_faithfulness.get("score"))
+                newrelic.agent.record_custom_metric("Custom/Guard/LowFaithfulness", 1)
+            answer = retry_answer
+            patch_failed = retry_patch_failed
+
         new_history = history + [
             {"role": "user", "content": question},
             {"role": "assistant", "content": _strip_patch_blocks(answer)},
@@ -791,9 +851,6 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
         root.update(output=answer[:500], metadata={"retrieved_chunks": len(context_chunks),
                                                     "query_type": classification["query_type"],
                                                     "cache": "miss"})
-        if not _check_groundedness(answer, context_chunks):
-            newrelic.agent.record_custom_metric("Custom/Guard/GroundednessLow", 1)
-            logger.info("low groundedness detected — answer may not reference source docs")
         return answer, context_chunks, classification, new_history
 
 

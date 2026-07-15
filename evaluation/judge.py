@@ -126,6 +126,25 @@ def _score_single(
         return {"score": None, "explanation": f"Parse error: {raw[:100]}"}
 
 
+def score_faithfulness(
+    client: anthropic.Anthropic,
+    *,
+    question: str,
+    answer: str,
+    context_chunks: list[dict[str, Any]],
+    judge_model: str = "claude-haiku-4-5",
+) -> dict[str, Any]:
+    """Score only faithfulness (single Haiku call) — cheap enough to run inline at request time."""
+    context_str = "\n\n---\n\n".join(
+        f"[{c.get('heading_path', '')}]\n{c.get('text', '')[:500]}"
+        for c in context_chunks
+    )
+    return _score_single(
+        client, judge_model, FAITHFULNESS_PROMPT,
+        context=context_str, question=question, answer=answer,
+    )
+
+
 def evaluate_generation(
     client: anthropic.Anthropic,
     *,
