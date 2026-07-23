@@ -3,6 +3,8 @@ uvicorn[standard]
 chromadb
 voyageai
 anthropic
+openai
+google-genai
 rank-bm25
 cachetools
 slowapi

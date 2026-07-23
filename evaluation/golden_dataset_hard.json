@@ -1,0 +1,114 @@
+[
+  {
+    "id": "h_001",
+    "question": "How would I build a simple subtractive synth: white noise through a resonant filter, with an envelope controlling the filter cutoff?",
+    "query_type": "both",
+    "relevant_chunk_ids": ["iem_parent_150", "iem_parent_266", "iem_parent_110"],
+    "reference_answer": "Use [noise~] as the source, feed it into [vcf~] (a resonant bandpass filter whose center frequency is set by a signal into its right inlet), and drive that frequency signal with [line~] to sweep the cutoff over time as an envelope.",
+    "difficulty": "hard",
+    "notes": "Multi-object synthesis: requires correctly combining 3 objects' documented inlet behavior into one coherent signal chain, not restating one doc entry."
+  },
+  {
+    "id": "h_002",
+    "question": "How do I build a monophonic synth voice that responds to MIDI note-in, including handling note-off?",
+    "query_type": "both",
+    "relevant_chunk_ids": ["iem_parent_151", "iem_parent_227", "iem_parent_129"],
+    "reference_answer": "Use [notein] to receive MIDI note/velocity/channel, [stripnote] to filter to note-on-only messages (or check velocity for note-off), and convert to frequency with [mtof] before driving an oscillator; [makenote] can pair note-on/note-off with a duration for simple sequencing.",
+    "difficulty": "hard",
+    "notes": "Multi-object synthesis across MIDI-handling objects; note-off handling is a common source of invented behavior."
+  },
+  {
+    "id": "h_003",
+    "question": "How can I record a short sample into a table and play it back at a different pitch?",
+    "query_type": "both",
+    "relevant_chunk_ids": ["iem_parent_242", "iem_parent_237"],
+    "reference_answer": "Record with [tabwrite~] into a named array, then play back with [tabread4~] (which supports fractional/interpolated read indices) driven by a phasor or line ramping at a different rate than the original sample rate to change pitch.",
+    "difficulty": "hard",
+    "notes": "Combines record and playback objects; tests whether the model invents specific playback-rate math not in the docs vs. correctly flagging it as general technique."
+  },
+  {
+    "id": "h_004",
+    "question": "How would I build a simple 8-step sequencer that reads frequencies from a table and triggers a tone on each step?",
+    "query_type": "both",
+    "relevant_chunk_ids": ["iem_parent_132", "iem_parent_236", "iem_parent_211"],
+    "reference_answer": "Use [metro] to generate a steady pulse, a counter (e.g. [+ 1] with a [mod 8] wrapped through a float storage, or [select]/[route] to branch by step) to track the current step index, [tabread] to look up the frequency for that step, and send the result to an oscillator.",
+    "difficulty": "hard",
+    "notes": "Requires synthesizing a counter mechanism the docs don't spell out as one recipe; good test of whether the model over-fabricates specific object names for the counter."
+  },
+  {
+    "id": "h_005",
+    "question": "When would I use [vline~] instead of [line~], and what's the practical difference?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": ["iem_parent_267", "iem_parent_110"],
+    "reference_answer": "[line~] generates a linear ramp from one message but restarts if a new ramp is sent before the current one finishes, and its timing can be disrupted by DSP block boundaries. [vline~] supports scheduling multiple queued ramp segments with delays in a single message and is more precise about timing since it isn't tied to block boundaries the same way, making it better for tightly-timed envelope segments.",
+    "difficulty": "hard",
+    "notes": "Comparison question forcing the model to hold two chunks in tension rather than reciting one; a common fabrication risk is inventing a precise mechanism for the timing difference."
+  },
+  {
+    "id": "h_006",
+    "question": "How would I build a bucket brigade delay-style effect? I'd like a variable delay line, a lowpass filter in the feedback loop, a feedback amount setting, and for extra points, a limiter on the output and an interpolating pitch-shift effect when the delay time changes.",
+    "query_type": "both",
+    "relevant_chunk_ids": ["iem_parent_52", "iem_parent_51", "iem_parent_50", "iem_parent_124", "iem_parent_32", "book_parent_491", "book_parent_493"],
+    "reference_answer": "Write into a delay line with [delwrite~], read back with [delread~] (or [delread4~]/[vd~] specifically for smooth interpolated pitch-shift effects when the delay time is changed continuously, since [delread~] alone is non-interpolating). Route the output through [lop~] to darken repeats, scale it by a feedback gain, and sum it back into [delwrite~]'s input to close the loop. [clip~] can serve as a simple hard limiter on the final output, since vanilla Pd has no dedicated limiter object. Non-recirculating vs. recirculating delay networks have a documented one-block minimum delay / order-of-execution subtlety that matters once feedback is involved.",
+    "difficulty": "hard",
+    "notes": "Simple effect with many opportunities to improve on a bare delay line (limiter, feedback filtering, interpolated pitch-shift). Tests whether the model reaches for delread4~/vd~ specifically (correct) vs. hand-waving pitch-shift on top of plain delread~, and whether it invents a nonexistent limiter~ object instead of reasoning to clip~."
+  },
+  {
+    "id": "h_007",
+    "question": "How would I build a simple stereo reverb effect? It needs to use Pd-native objects only — not Pd-extended or other library externals.",
+    "query_type": "both",
+    "relevant_chunk_ids": ["iem_parent_192", "iem_parent_193", "iem_parent_194", "book_parent_484", "book_parent_485", "book_parent_496"],
+    "reference_answer": "Vanilla Pd ships built-in reverberators — [rev1~] (simple 1-in/1-out), [rev2~] (1-in/4-out), and [rev3~] (2-in/4-out, more elaborate) — none of which require Pd-extended or any external library. Artificial reverberation works by combining many delayed, filtered copies of the input (e.g. comb and allpass filter networks) into a dense decay that doesn't have an audible periodic pitch, unlike a single short delay. Any reverb object other than rev1~/rev2~/rev3~ (e.g. freeverb~) is a Pd-extended or third-party external, not part of vanilla Pd, and shouldn't be presented as built-in.",
+    "difficulty": "hard",
+    "notes": "Directly tests the vanilla-vs-Pd-extended boundary: the honest answer requires knowing rev1~/rev2~/rev3~ exist AND that common alternatives like freeverb~ don't belong to this corpus. Also tests whether reverb theory is explained from the book's actual content or fabricated."
+  },
+  {
+    "id": "h_008",
+    "question": "Describe how you would build a granular synthesis engine in Pd.",
+    "query_type": "both",
+    "relevant_chunk_ids": ["iem_parent_242", "iem_parent_237", "iem_parent_169", "iem_parent_205"],
+    "reference_answer": "Record or load audio into a table (e.g. via [tabwrite~] or soundfiler), then use a [phasor~] (or several phase-offset phasors, for grain overlap) to continuously scan a small window of that table via [tabread4~]'s interpolated lookup, retriggering at the phasor's period to produce repeated short grains. Each grain needs an amplitude envelope (e.g. a Hann-shaped window, which vanilla Pd has no dedicated object for — it's typically built from [cos~] or a stored table shape) to avoid clicks at grain boundaries. Playback pitch is controlled by the phasor's scan rate relative to the grain's natural duration, and grain/window size by the phasor's frequency and the scanned table region's width.",
+    "difficulty": "hard",
+    "notes": "A standard technique found in many online Pd examples, but 'granular synthesis' is not itself a named topic in this documentation corpus — the correct answer synthesizes it from real documented primitives (tabread4~, phasor~, samphold~, tabwrite~) while flagging that the overall recipe, and any windowing object name, isn't verbatim documented."
+  },
+  {
+    "id": "h_009",
+    "question": "How would you build a Buchla-style wavefolder in Pd?",
+    "query_type": "both",
+    "relevant_chunk_ids": ["iem_parent_158", "iem_parent_64", "iem_parent_66", "iem_parent_36"],
+    "reference_answer": "A common approach is to feed a rising-amplitude signal through a periodic function like cosine (e.g. via [cos~] or [expr~ cos($v1)]) so that as the input exceeds the cosine's natural range it 'folds' back on itself rather than clipping; [expr~]/[fexpr~] can implement arbitrary custom folding curves directly for more Buchla-like multi-stage folding. There is no dedicated wavefolder object in vanilla Pd, and no [pong~] object either — those would have to be built from general-purpose math/signal objects like [cos~], [expr~], or [fexpr~], not cited as if a single built-in object already does it.",
+    "difficulty": "hard",
+    "notes": "Draws on real synthesis knowledge outside anything this corpus explicitly teaches (no chapter covers wavefolding), so the answer must be synthesized from generically-documented objects (cos~, expr~/fexpr~) while explicitly not inventing a nonexistent dedicated object (a fabricated [wavefold~] or an incorrectly-claimed [pong~])."
+  },
+  {
+    "id": "h_010",
+    "question": "Add a resonance control to that filter that I can automate smoothly over time.",
+    "query_type": "both",
+    "history": [
+      {"role": "user", "content": "How would I build a simple subtractive synth: white noise through a resonant filter, with an envelope controlling the filter cutoff?"},
+      {"role": "assistant", "content": "Use [noise~] into [vcf~], with [line~] driving the cutoff frequency signal into vcf~'s right inlet to sweep it as an envelope."}
+    ],
+    "relevant_chunk_ids": ["iem_parent_266", "iem_parent_110"],
+    "reference_answer": "[vcf~]'s Q (resonance/bandwidth) is set by its third inlet as a float, not a signal, so it can only be stepped, not smoothly ramped with [line~] directly into that inlet; to automate it smoothly you'd need to send it frequent float updates (e.g. from a metro or a line object's output read at control rate) rather than driving it with a raw line~ signal the way the cutoff is driven.",
+    "difficulty": "hard",
+    "notes": "Deliberately probes a real Pd gotcha (float-only Q inlet) that's easy to get wrong by assuming symmetric signal-rate behavior across all of vcf~'s inlets; strong fabrication-risk multi-turn case."
+  },
+  {
+    "id": "h_011",
+    "question": "What happens if I send a negative frequency value to [osc~]?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": ["iem_parent_158"],
+    "reference_answer": "This isn't explicitly documented; a cosine oscillator is even-symmetric, so a negative frequency is mathematically equivalent to the same positive frequency (just phase-inverted at most), but the documentation doesn't spell out Pd's exact handling of negative input.",
+    "difficulty": "hard",
+    "notes": "Deliberately thin documentation — the docs don't answer this directly. Tests whether the model says so explicitly (per the system prompt's instruction) or fabricates a confident-sounding specific answer."
+  },
+  {
+    "id": "h_012",
+    "question": "Which is more CPU-efficient in a patch with many voices: [bp~], [vcf~], or a [lop~]/[hip~] pair for band-limiting a signal?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": ["iem_parent_27", "iem_parent_266", "iem_parent_124", "iem_parent_100"],
+    "reference_answer": "The documentation doesn't provide CPU-cost benchmarks for these objects; in general a single [bp~] or a [lop~]/[hip~] pair (each simple one-pole/two-pole filters) is computationally lighter than [vcf~], which does additional internal work to support its resonance/Q control, but exact relative cost isn't something the docs quantify.",
+    "difficulty": "hard",
+    "notes": "Performance/CPU-cost questions are essentially never covered in reference docs — strong test of whether the model invents specific benchmark-sounding numbers instead of flagging the limitation."
+  }
+]

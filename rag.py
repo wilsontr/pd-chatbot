@@ -17,6 +17,7 @@ import anthropic
 from langfuse import get_client as _get_langfuse
 from pd_schema import PdPatch
 from evaluation.judge import score_faithfulness
+from evaluation.retry import with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,8 @@ def _compress_history(history: list[HistoryItem]) -> list[HistoryItem]:
                          model="claude-haiku-4-5", input=old_text[:500])
     with obs as gen:
         with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
-            resp = llm.messages.create(
+            resp = with_retries(
+                llm.messages.create,
                 model="claude-haiku-4-5",
                 max_tokens=200,
                 messages=[{
@@ -209,7 +211,8 @@ Return only the JSON object, no other text."""
                             model="claude-haiku-4-5", input=question)
     with obs_cm as obs:
         with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
-            response = llm.messages.create(
+            response = with_retries(
+                llm.messages.create,
                 model="claude-haiku-4-5",
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}]
@@ -473,7 +476,8 @@ def generate_response(question: str, context_chunks: list[Chunk], history: list[
                             input=question,
                             metadata={"chunk_count": len(context_chunks)})
     with obs_cm as obs:
-        response = llm.messages.create(
+        response = with_retries(
+            llm.messages.create,
             model="claude-sonnet-4-6",
             max_tokens=4096,
             system=system_block,

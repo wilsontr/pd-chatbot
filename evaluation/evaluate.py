@@ -7,6 +7,9 @@ Usage:
     python -m evaluation.evaluate --retrieval --no-ablation
     python -m evaluation.evaluate --generation --model claude-haiku-4-5
     python -m evaluation.evaluate --generation --compare claude-haiku-4-5
+    python -m evaluation.evaluate --generation --compare deepseek-v4-flash deepseek-v4-pro  # cross-provider, needs DEEPSEEK_API_KEY
+    python -m evaluation.evaluate --generation --judge gemini-3.1-pro-preview  # judge outside the compared vendor families, needs GEMINI_API_KEY
+    python -m evaluation.evaluate --generation --trials 3  # repeat the full run N times, report mean/std across trials
     python -m evaluation.evaluate --generation --sample 5
     python -m evaluation.evaluate --retrieval --report EVAL.md
 """
@@ -14,8 +17,10 @@ Usage:
 import argparse
 import datetime
 import json
+import statistics
 import sys
 from pathlib import Path
+from typing import Any
 
 from .dataset import GoldenDataset
 from .retrieval import run_retrieval_eval
@@ -26,6 +31,46 @@ _STRATEGY_LABELS = {
     "vector_only": "Vector-only",
     "bm25_only": "BM25-only",
 }
+
+
+def _aggregate_trials(trial_summaries: list[dict]) -> dict[str, Any]:
+    """Merge N run_generation_eval summaries (same model set, same dataset) into
+    one report with mean/std across trials for every numeric per-model field.
+
+    Run-to-run variance matters here because generation isn't deterministic — the
+    same model can score noticeably differently between runs (observed directly
+    earlier in this project), so a single-trial comparison can overstate how
+    confident a "model A beats model B" conclusion really is.
+    """
+    model_names = trial_summaries[0]["per_model"].keys()
+    per_model: dict[str, Any] = {}
+    for m_name in model_names:
+        merged: dict[str, Any] = {}
+        keys: set[str] = set()
+        for t in trial_summaries:
+            keys.update(t["per_model"].get(m_name, {}).keys())
+        for key in keys:
+            values = [
+                t["per_model"].get(m_name, {}).get(key)
+                for t in trial_summaries
+                if isinstance(t["per_model"].get(m_name, {}).get(key), (int, float))
+            ]
+            if not values:
+                continue
+            if key == "n":
+                merged["n"] = values[0]
+                continue
+            merged[f"{key}_by_trial"] = values
+            merged[f"{key}_avg"] = round(sum(values) / len(values), 4)
+            if len(values) > 1:
+                merged[f"{key}_std"] = round(statistics.stdev(values), 4)
+        per_model[m_name] = merged
+
+    return {
+        "trials": len(trial_summaries),
+        "per_model": per_model,
+        "raw_trials": trial_summaries,
+    }
 
 
 def main(argv: list[str] | None = None) -> dict:
@@ -54,7 +99,8 @@ def main(argv: list[str] | None = None) -> dict:
     )
     parser.add_argument(
         "--compare", type=str, nargs="*",
-        help="Additional models to compare against (e.g. --compare claude-haiku-4-5)"
+        help="Additional models to compare against (e.g. --compare claude-haiku-4-5). "
+             "A deepseek-* model routes to DeepSeek's API (requires DEEPSEEK_API_KEY)."
     )
     parser.add_argument(
         "--judge", type=str, default="claude-haiku-4-5",
@@ -63,6 +109,11 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument(
         "--sample", type=int, default=None,
         help="Limit generation eval to N entries (default: all)"
+    )
+    parser.add_argument(
+        "--trials", type=int, default=1,
+        help="Repeat the full generation eval N times and report mean/std across "
+             "trials, to distinguish real differences from run-to-run noise (default: 1)"
     )
     parser.add_argument(
         "--dataset", type=str, default=None,
@@ -109,14 +160,29 @@ def main(argv: list[str] | None = None) -> dict:
     if args.all or args.generation:
         if not args.quiet:
             print("\n=== Generation Evaluation ===\n", file=sys.stderr)
-        results["generation"] = run_generation_eval(
-            dataset=dataset,
-            model=args.model,
-            judge_model=args.judge,
-            compare=args.compare,
-            sample=args.sample,
-            verbose=not args.quiet,
-        )
+        if args.trials > 1:
+            trial_summaries = []
+            for t in range(args.trials):
+                if not args.quiet:
+                    print(f"\n--- Trial {t+1}/{args.trials} ---\n", file=sys.stderr)
+                trial_summaries.append(run_generation_eval(
+                    dataset=dataset,
+                    model=args.model,
+                    judge_model=args.judge,
+                    compare=args.compare,
+                    sample=args.sample,
+                    verbose=not args.quiet,
+                ))
+            results["generation"] = _aggregate_trials(trial_summaries)
+        else:
+            results["generation"] = run_generation_eval(
+                dataset=dataset,
+                model=args.model,
+                judge_model=args.judge,
+                compare=args.compare,
+                sample=args.sample,
+                verbose=not args.quiet,
+            )
 
     if args.output:
         with open(args.output, "w") as f:

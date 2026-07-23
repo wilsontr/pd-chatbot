@@ -1,0 +1,93 @@
+[
+  {
+    "id": "h_007",
+    "question": "How would I build a simple stereo reverb effect? It needs to use Pd-native objects only \u2014 not Pd-extended or other library externals.",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_192",
+      "iem_parent_193",
+      "iem_parent_194",
+      "book_parent_484",
+      "book_parent_485",
+      "book_parent_496"
+    ],
+    "reference_answer": "Vanilla Pd ships built-in reverberators \u2014 [rev1~] (simple 1-in/1-out), [rev2~] (1-in/4-out), and [rev3~] (2-in/4-out, more elaborate) \u2014 none of which require Pd-extended or any external library. Artificial reverberation works by combining many delayed, filtered copies of the input (e.g. comb and allpass filter networks) into a dense decay that doesn't have an audible periodic pitch, unlike a single short delay. Any reverb object other than rev1~/rev2~/rev3~ (e.g. freeverb~) is a Pd-extended or third-party external, not part of vanilla Pd, and shouldn't be presented as built-in.",
+    "difficulty": "hard",
+    "notes": "Directly tests the vanilla-vs-Pd-extended boundary: the honest answer requires knowing rev1~/rev2~/rev3~ exist AND that common alternatives like freeverb~ don't belong to this corpus. Also tests whether reverb theory is explained from the book's actual content or fabricated."
+  },
+  {
+    "id": "h_008",
+    "question": "Describe how you would build a granular synthesis engine in Pd.",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_242",
+      "iem_parent_237",
+      "iem_parent_169",
+      "iem_parent_205"
+    ],
+    "reference_answer": "Record or load audio into a table (e.g. via [tabwrite~] or soundfiler), then use a [phasor~] (or several phase-offset phasors, for grain overlap) to continuously scan a small window of that table via [tabread4~]'s interpolated lookup, retriggering at the phasor's period to produce repeated short grains. Each grain needs an amplitude envelope (e.g. a Hann-shaped window, which vanilla Pd has no dedicated object for \u2014 it's typically built from [cos~] or a stored table shape) to avoid clicks at grain boundaries. Playback pitch is controlled by the phasor's scan rate relative to the grain's natural duration, and grain/window size by the phasor's frequency and the scanned table region's width.",
+    "difficulty": "hard",
+    "notes": "A standard technique found in many online Pd examples, but 'granular synthesis' is not itself a named topic in this documentation corpus \u2014 the correct answer synthesizes it from real documented primitives (tabread4~, phasor~, samphold~, tabwrite~) while flagging that the overall recipe, and any windowing object name, isn't verbatim documented."
+  },
+  {
+    "id": "h_009",
+    "question": "How would you build a Buchla-style wavefolder in Pd?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_158",
+      "iem_parent_64",
+      "iem_parent_66",
+      "iem_parent_36"
+    ],
+    "reference_answer": "A common approach is to feed a rising-amplitude signal through a periodic function like cosine (e.g. via [cos~] or [expr~ cos($v1)]) so that as the input exceeds the cosine's natural range it 'folds' back on itself rather than clipping; [expr~]/[fexpr~] can implement arbitrary custom folding curves directly for more Buchla-like multi-stage folding. There is no dedicated wavefolder object in vanilla Pd, and no [pong~] object either \u2014 those would have to be built from general-purpose math/signal objects like [cos~], [expr~], or [fexpr~], not cited as if a single built-in object already does it.",
+    "difficulty": "hard",
+    "notes": "Draws on real synthesis knowledge outside anything this corpus explicitly teaches (no chapter covers wavefolding), so the answer must be synthesized from generically-documented objects (cos~, expr~/fexpr~) while explicitly not inventing a nonexistent dedicated object (a fabricated [wavefold~] or an incorrectly-claimed [pong~])."
+  },
+  {
+    "id": "h_010",
+    "question": "Add a resonance control to that filter that I can automate smoothly over time.",
+    "query_type": "both",
+    "history": [
+      {
+        "role": "user",
+        "content": "How would I build a simple subtractive synth: white noise through a resonant filter, with an envelope controlling the filter cutoff?"
+      },
+      {
+        "role": "assistant",
+        "content": "Use [noise~] into [vcf~], with [line~] driving the cutoff frequency signal into vcf~'s right inlet to sweep it as an envelope."
+      }
+    ],
+    "relevant_chunk_ids": [
+      "iem_parent_266",
+      "iem_parent_110"
+    ],
+    "reference_answer": "[vcf~]'s Q (resonance/bandwidth) is set by its third inlet as a float, not a signal, so it can only be stepped, not smoothly ramped with [line~] directly into that inlet; to automate it smoothly you'd need to send it frequent float updates (e.g. from a metro or a line object's output read at control rate) rather than driving it with a raw line~ signal the way the cutoff is driven.",
+    "difficulty": "hard",
+    "notes": "Deliberately probes a real Pd gotcha (float-only Q inlet) that's easy to get wrong by assuming symmetric signal-rate behavior across all of vcf~'s inlets; strong fabrication-risk multi-turn case."
+  },
+  {
+    "id": "h_011",
+    "question": "What happens if I send a negative frequency value to [osc~]?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_158"
+    ],
+    "reference_answer": "This isn't explicitly documented; a cosine oscillator is even-symmetric, so a negative frequency is mathematically equivalent to the same positive frequency (just phase-inverted at most), but the documentation doesn't spell out Pd's exact handling of negative input.",
+    "difficulty": "hard",
+    "notes": "Deliberately thin documentation \u2014 the docs don't answer this directly. Tests whether the model says so explicitly (per the system prompt's instruction) or fabricates a confident-sounding specific answer."
+  },
+  {
+    "id": "h_012",
+    "question": "Which is more CPU-efficient in a patch with many voices: [bp~], [vcf~], or a [lop~]/[hip~] pair for band-limiting a signal?",
+    "query_type": "conceptual",
+    "relevant_chunk_ids": [
+      "iem_parent_27",
+      "iem_parent_266",
+      "iem_parent_124",
+      "iem_parent_100"
+    ],
+    "reference_answer": "The documentation doesn't provide CPU-cost benchmarks for these objects; in general a single [bp~] or a [lop~]/[hip~] pair (each simple one-pole/two-pole filters) is computationally lighter than [vcf~], which does additional internal work to support its resonance/Q control, but exact relative cost isn't something the docs quantify.",
+    "difficulty": "hard",
+    "notes": "Performance/CPU-cost questions are essentially never covered in reference docs \u2014 strong test of whether the model invents specific benchmark-sounding numbers instead of flagging the limitation."
+  }
+]

@@ -1,0 +1,82 @@
+[
+  {
+    "id": "h_001",
+    "question": "How would I build a simple subtractive synth: white noise through a resonant filter, with an envelope controlling the filter cutoff?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_150",
+      "iem_parent_266",
+      "iem_parent_110"
+    ],
+    "reference_answer": "Use [noise~] as the source, feed it into [vcf~] (a resonant bandpass filter whose center frequency is set by a signal into its right inlet), and drive that frequency signal with [line~] to sweep the cutoff over time as an envelope.",
+    "difficulty": "hard",
+    "notes": "Multi-object synthesis: requires correctly combining 3 objects' documented inlet behavior into one coherent signal chain, not restating one doc entry."
+  },
+  {
+    "id": "h_002",
+    "question": "How do I build a monophonic synth voice that responds to MIDI note-in, including handling note-off?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_151",
+      "iem_parent_227",
+      "iem_parent_129"
+    ],
+    "reference_answer": "Use [notein] to receive MIDI note/velocity/channel, [stripnote] to filter to note-on-only messages (or check velocity for note-off), and convert to frequency with [mtof] before driving an oscillator; [makenote] can pair note-on/note-off with a duration for simple sequencing.",
+    "difficulty": "hard",
+    "notes": "Multi-object synthesis across MIDI-handling objects; note-off handling is a common source of invented behavior."
+  },
+  {
+    "id": "h_003",
+    "question": "How can I record a short sample into a table and play it back at a different pitch?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_242",
+      "iem_parent_237"
+    ],
+    "reference_answer": "Record with [tabwrite~] into a named array, then play back with [tabread4~] (which supports fractional/interpolated read indices) driven by a phasor or line ramping at a different rate than the original sample rate to change pitch.",
+    "difficulty": "hard",
+    "notes": "Combines record and playback objects; tests whether the model invents specific playback-rate math not in the docs vs. correctly flagging it as general technique."
+  },
+  {
+    "id": "h_004",
+    "question": "How would I build a simple 8-step sequencer that reads frequencies from a table and triggers a tone on each step?",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_132",
+      "iem_parent_236",
+      "iem_parent_211"
+    ],
+    "reference_answer": "Use [metro] to generate a steady pulse, a counter (e.g. [+ 1] with a [mod 8] wrapped through a float storage, or [select]/[route] to branch by step) to track the current step index, [tabread] to look up the frequency for that step, and send the result to an oscillator.",
+    "difficulty": "hard",
+    "notes": "Requires synthesizing a counter mechanism the docs don't spell out as one recipe; good test of whether the model over-fabricates specific object names for the counter."
+  },
+  {
+    "id": "h_005",
+    "question": "When would I use [vline~] instead of [line~], and what's the practical difference?",
+    "query_type": "object_reference",
+    "relevant_chunk_ids": [
+      "iem_parent_267",
+      "iem_parent_110"
+    ],
+    "reference_answer": "[line~] generates a linear ramp from one message but restarts if a new ramp is sent before the current one finishes, and its timing can be disrupted by DSP block boundaries. [vline~] supports scheduling multiple queued ramp segments with delays in a single message and is more precise about timing since it isn't tied to block boundaries the same way, making it better for tightly-timed envelope segments.",
+    "difficulty": "hard",
+    "notes": "Comparison question forcing the model to hold two chunks in tension rather than reciting one; a common fabrication risk is inventing a precise mechanism for the timing difference."
+  },
+  {
+    "id": "h_006",
+    "question": "How would I build a bucket brigade delay-style effect? I'd like a variable delay line, a lowpass filter in the feedback loop, a feedback amount setting, and for extra points, a limiter on the output and an interpolating pitch-shift effect when the delay time changes.",
+    "query_type": "both",
+    "relevant_chunk_ids": [
+      "iem_parent_52",
+      "iem_parent_51",
+      "iem_parent_50",
+      "iem_parent_124",
+      "iem_parent_32",
+      "book_parent_491",
+      "book_parent_493"
+    ],
+    "reference_answer": "Write into a delay line with [delwrite~], read back with [delread~] (or [delread4~]/[vd~] specifically for smooth interpolated pitch-shift effects when the delay time is changed continuously, since [delread~] alone is non-interpolating). Route the output through [lop~] to darken repeats, scale it by a feedback gain, and sum it back into [delwrite~]'s input to close the loop. [clip~] can serve as a simple hard limiter on the final output, since vanilla Pd has no dedicated limiter object. Non-recirculating vs. recirculating delay networks have a documented one-block minimum delay / order-of-execution subtlety that matters once feedback is involved.",
+    "difficulty": "hard",
+    "notes": "Simple effect with many opportunities to improve on a bare delay line (limiter, feedback filtering, interpolated pitch-shift). Tests whether the model reaches for delread4~/vd~ specifically (correct) vs. hand-waving pitch-shift on top of plain delread~, and whether it invents a nonexistent limiter~ object instead of reasoning to clip~."
+  }
+]
