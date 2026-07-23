@@ -1,6 +1,8 @@
-"""Tests for guardrails: prompt injection detection and groundedness gating."""
+"""Tests for guardrails: prompt injection detection and faithfulness gating."""
 
-from rag import _check_prompt_injection, _check_groundedness
+from unittest.mock import patch
+
+from rag import _check_prompt_injection, _check_faithfulness
 
 
 class TestPromptInjection:
@@ -42,25 +44,20 @@ class TestPromptInjection:
         assert not _check_prompt_injection("you are a helpful assistant that answers questions")
 
 
-class TestGroundedness:
-    def test_empty_chunks_is_grounded(self):
-        """No chunks means the fallback message was explicit."""
-        assert _check_groundedness("I couldn't find any relevant documentation.", [])
+class TestFaithfulness:
+    def test_no_chunks_skips_check(self):
+        """No retrieved chunks means nothing to judge against — treat as skip, not failure."""
+        assert _check_faithfulness("question", "I couldn't find any relevant documentation.", []) is None
 
-    def test_answer_contains_source_url(self):
-        chunks = [{"url": "http://msp.ucsd.edu/Pd_documentation/1.introduction.htm", "text": "..."}]
-        assert _check_groundedness(
-            "As described in the manual at http://msp.ucsd.edu/Pd_documentation/1.introduction.htm, Pd is...",
-            chunks,
-        )
+    def test_judge_result_is_returned(self):
+        chunks = [{"heading_path": "intro", "text": "Pd is a visual programming language."}]
+        with patch("rag.score_faithfulness", return_value={"score": 5, "explanation": "fully supported"}) as mock_score:
+            result = _check_faithfulness("What is Pd?", "Pd is a visual programming language.", chunks)
+        mock_score.assert_called_once()
+        assert result == {"score": 5, "explanation": "fully supported"}
 
-    def test_answer_missing_source_url(self):
-        chunks = [{"url": "http://msp.ucsd.edu/Pd_documentation/1.introduction.htm", "text": "..."}]
-        assert not _check_groundedness("Pd is a visual programming language. You can make patches in it.", chunks)
-
-    def test_first_of_multiple_chunks(self):
-        chunks = [
-            {"url": "http://example.com/a"},
-            {"url": "http://example.com/b"},
-        ]
-        assert _check_groundedness("See http://example.com/b for details.", chunks)
+    def test_judge_failure_returns_none(self):
+        """If the judge call itself raises, treat as skip rather than propagating the error."""
+        chunks = [{"heading_path": "intro", "text": "Pd is a visual programming language."}]
+        with patch("rag.score_faithfulness", side_effect=RuntimeError("judge unavailable")):
+            assert _check_faithfulness("What is Pd?", "Pd is a visual programming language.", chunks) is None
