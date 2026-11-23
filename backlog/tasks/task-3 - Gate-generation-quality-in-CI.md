@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@deepseek'
 created_date: '2026-11-23 20:39'
-updated_date: '2026-11-23 22:38'
+updated_date: '2026-11-23 22:50'
 labels:
   - evaluation
   - ci
@@ -66,6 +66,13 @@ Verification:
 - Both workflow YAMLs parse; the command generation-eval.yml runs was exercised locally against the same keys.
 
 Caveat: the gate cannot run on fork PRs (no repository secrets); the README says so. GitHub-side execution of the new workflow itself is unverified until the next push.
+
+CI verification 2026-11-23 (pushed main 3fbfbd7, rebased over the earlier CI EVAL.md commit 8e0611d):
+- Evaluation run 45281719435 (push, 6m10s): success. Every step green — index build, full eval (retrieval + sampled generation), commit updated EVAL.md, pytest. The PR-only retrieval step correctly skipped. CI wrote cb280bc 'ci: update evaluation results [skip ci]', whose docs/EVAL.md now carries the generation table: faithfulness 4.70, relevance 5.00, citation 4.80, n=10, $0.0299/query, alongside retrieval (recall@5 80.00%, MRR 0.736) and both threshold footers. AC #4 is now proven by the real pipeline rather than a local run.
+- Generation eval gate run 45282777149 (workflow_dispatch, 3m49s): success. This was the new workflow's first execution on GitHub, so its triggers, secrets, index build and gated command are no longer untested; the PR path filter itself stays declarative until a PR opens.
+- Railway deployed cb280bc to production at 22:43:51Z ('Deployment has completed') and https://pd-chatbot.vercel.app/api/health returns {"status":"ok"}. No runtime code changed in this task, so the deploy is content-equivalent for the app.
+- Both runs emit a Node 20 deprecation annotation (actions/checkout@v4 and actions/setup-python@v5 forced onto Node 24). Upstream action drift, not caused by this change; bumping to newer action majors would clear it.
+- Cost of the two verification runs: roughly $0.30 + $0.30. This note is committed locally and left unpushed on purpose, since every push to main re-runs the full sampled generation eval.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
