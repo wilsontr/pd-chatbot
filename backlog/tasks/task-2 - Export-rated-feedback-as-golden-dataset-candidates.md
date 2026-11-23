@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@deepseek'
 created_date: '2026-11-23 20:39'
-updated_date: '2026-11-23 22:04'
+updated_date: '2026-11-23 22:12'
 labels:
   - feedback
   - evaluation
@@ -65,6 +65,8 @@ Full-suite update after VOYAGE_API_KEY was added to .env:
 - pytest tests/: 72 passed, 4 failed. tests/test_guardrails.py and tests/test_pd_schema.py, which could not even be collected before the index existed, now pass.
 - The 4 failures are tests/test_evaluation.py::test_retrieval_{recall,mrr}_threshold and test_hybrid_beats_{vector_only,bm25_only}. They are pre-existing and unrelated to this task: rag.retrieve() classifies the query with claude-haiku-4-5 and there is no heuristic fallback, so with no ANTHROPIC_API_KEY every entry raises an auth error, which run_retrieval_eval swallows, leaving recall 0.0000. Ran the same four tests in a worktree at d33a207 (the commit before this task) against the same index and env: identical 4 failures. They need ANTHROPIC_API_KEY, which CI supplies via secrets.
 - Consequence: TASK-2's own evidence stands (35/35 feedback and export tests pass); the retrieval thresholds remain unverified locally until an Anthropic key is available.
+
+Full suite green 2026-11-23 after ANTHROPIC_API_KEY was added to .env: pytest tests/ -> 76 passed in 113s. The four retrieval threshold tests now run for real: hybrid RRF recall@5 0.7667, MRR 0.7556, recall@10 0.8000 (thresholds 0.60 / 0.30); vector-only 0.7278 recall@5 / 0.6106 MRR; BM25-only 0.3667 / 0.2648. Hybrid beats both baselines and the local numbers match the README table. No tracked files changed by the run (the eval was called through the API, not the --report path, so docs/EVAL.md was left to CI).
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
