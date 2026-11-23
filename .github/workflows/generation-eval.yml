@@ -1,0 +1,71 @@
+name: Generation eval gate
+
+# The retrieval gate runs in eval.yml on every push and PR (pytest threshold
+# assertions). Generation is different: it calls an LLM to answer and another to
+# judge, so it is too expensive to run on every event. This workflow runs it on
+# pull requests that can plausibly change answer quality, and fails the build
+# when faithfulness or relevance drops below the thresholds documented in
+# evaluation/gates.py and the README.
+#
+# Paths: rag.py holds SYSTEM_PROMPT; evaluation/** holds the judge rubric, the
+# golden dataset and the harness. A dataset edit can move the scores on its own,
+# so it belongs in the trigger too.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'rag.py'
+      - 'evaluation/**'
+      - '.github/workflows/generation-eval.yml'
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: 'Number of generation samples'
+        type: string
+        default: '10'
+
+# A newer push to the same PR makes the previous run pointless, and each run
+# costs money, so cancel in flight.
+concurrency:
+  group: generation-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generation-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Build ChromaDB index (embeddings must be precomputed)
+        env:
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: |
+          python embed_and_index.py
+
+      # Cost bound: sample size x (generation + 3 judge calls). At the measured
+      # ~$0.031/entry that is about $0.32 for the default 10-entry run. The
+      # summary written to $GITHUB_STEP_SUMMARY states the sample, both models
+      # and the measured dollars for the run that actually happened.
+      - name: Run sampled generation eval (gated)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          SAMPLE: ${{ github.event.inputs.sample || '10' }}
+        run: |
+          python -m evaluation.evaluate \
+            --generation \
+            --sample "$SAMPLE" \
+            --gate \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --quiet

@@ -78,10 +78,41 @@ Current numbers are published in **[EVAL.md](docs/EVAL.md)**, updated on every p
 vector-only and BM25-only baselines to prove hybrid RRF wins.
 
 **Generation metrics**: faithfulness, answer relevance, and citation
-correctness scored by a Claude-as-judge rubric (LLM-as-judge).
+correctness scored by a Claude-as-judge rubric (LLM-as-judge). A sampled run
+runs in CI on every push to `main`, so [EVAL.md](docs/EVAL.md) publishes
+current generation numbers next to the retrieval tables.
 
-**CI gating**: `pytest tests/` asserts thresholds (recall@5 ≥ 60%, MRR ≥
-0.30, hybrid ≥ both baselines). Runs on every PR and push.
+**CI gating — retrieval**: `pytest tests/` asserts thresholds (recall@5 ≥ 60%,
+MRR ≥ 0.30, hybrid ≥ both baselines). Runs on every PR and push.
+
+**CI gating — generation**: a separate workflow runs a sampled generation eval
+on pull requests that touch `rag.py` (the system prompt lives there),
+`evaluation/**` (judge rubric, dataset, harness) or the workflow itself, and
+fails the build when a mean drops below threshold.
+
+| Setting | Value |
+|---|---|
+| Generation model | `claude-sonnet-4-6` |
+| Judge model | `claude-haiku-4-5` (1–5 rubric) |
+| Sample | 10 of 30 golden entries, deterministic prefix |
+| Gate | faithfulness ≥ 4.0, relevance ≥ 4.5 |
+| Cost bound | ~$0.031/query measured → **~$0.32 per PR run** (generation + judge tokens; retrieval calls are extra) |
+
+Citation correctness is reported but not gated: it is the noisiest dimension
+(baseline mean 4.6 with a minimum of 2). Every run states its sample, both
+models and the measured dollars in the GitHub job summary, so cost is visible
+rather than assumed. Thresholds and their rationale live in
+[`evaluation/gates.py`](evaluation/gates.py).
+
+```bash
+# same command CI runs, against the first 10 entries
+python -m evaluation.evaluate --generation --sample 10 --gate --summary /tmp/summary.md
+```
+
+The full eval also runs on `main`, and its report is committed back as
+`docs/EVAL.md`. Caveat: pull requests from forks do not get repository secrets,
+so the generation gate cannot run there and will fail on auth — the retrieval
+gate in `eval.yml` still runs (that job needs secrets too).
 
 ### From feedback to eval
 
@@ -192,9 +223,16 @@ A [GitHub Actions workflow](.github/workflows/eval.yml) runs on every push and
 PR:
 
 1. Builds ChromaDB from committed chunk files
-2. Runs the retrieval evaluation (recall@k, MRR, nDCG) and writes `docs/EVAL.md`
+2. Runs the retrieval evaluation (recall@k, MRR, nDCG) — and, on `main`, a
+   sampled generation eval — writing `docs/EVAL.md`
 3. Auto-commits `docs/EVAL.md` to `main` (skips on PRs)
 4. Runs `pytest tests/` with threshold assertions
+
+A second workflow
+([`generation-eval.yml`](.github/workflows/generation-eval.yml)) adds the
+generation gate on pull requests that touch `rag.py`, `evaluation/**` or itself,
+failing the build below the documented faithfulness/relevance thresholds and
+reporting the measured cost in the job summary.
 
 Requires `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY` set as [repository secrets](https://github.com/wilsontr/pd-chatbot/settings/secrets/actions).
 

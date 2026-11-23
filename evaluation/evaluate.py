@@ -12,6 +12,9 @@ Usage:
     python -m evaluation.evaluate --generation --trials 3  # repeat the full run N times, report mean/std across trials
     python -m evaluation.evaluate --generation --sample 5
     python -m evaluation.evaluate --retrieval --report docs/EVAL.md
+    python -m evaluation.evaluate --generation --sample 10 --gate --summary "$GITHUB_STEP_SUMMARY"
+        # CI gate: exits non-zero when a generation mean is below the documented
+        # threshold, and appends sample/models/measured cost to the job summary
 """
 
 import argparse
@@ -25,6 +28,12 @@ from typing import Any
 from .dataset import GoldenDataset
 from .retrieval import run_retrieval_eval
 from .generation import run_generation_eval
+from .gates import (
+    GENERATION_THRESHOLDS,
+    check_generation_thresholds,
+    generation_summary_markdown,
+    mean_score,
+)
 
 _STRATEGY_LABELS = {
     "hybrid_rrf": "Hybrid RRF",
@@ -128,6 +137,17 @@ def main(argv: list[str] | None = None) -> dict:
         help="Write a markdown report to the given path (e.g. --report docs/EVAL.md)"
     )
     parser.add_argument(
+        "--summary", type=str, default=None,
+        help="Write a short markdown job summary to the given path "
+             "(e.g. --summary \"$GITHUB_STEP_SUMMARY\"); states sample, models, "
+             "measured cost and the gate verdict"
+    )
+    parser.add_argument(
+        "--gate", action="store_true",
+        help="Exit non-zero when a generation mean falls below the documented "
+             "threshold (faithfulness/relevance, see evaluation/gates.py)"
+    )
+    parser.add_argument(
         "--quiet", action="store_true",
         help="Suppress verbose output"
     )
@@ -190,14 +210,66 @@ def main(argv: list[str] | None = None) -> dict:
         if not args.quiet:
             print(f"\nResults written to {args.output}", file=sys.stderr)
 
+    generation_meta = None
+    if "generation" in results:
+        generation_meta = {
+            "model": args.model,
+            "judge": args.judge,
+            "sample": args.sample or len(dataset),
+        }
+
     if args.report:
-        report = _build_report(results, dataset.stats)
+        report = _build_report(results, dataset.stats, generation_meta=generation_meta)
         with open(args.report, "w") as f:
             f.write(report)
         if not args.quiet:
             print(f"\nReport written to {args.report}", file=sys.stderr)
 
-    return results
+    if args.summary:
+        # Appended rather than overwritten: in CI this path is
+        # $GITHUB_STEP_SUMMARY, which collects output from every step in the job.
+        with open(args.summary, "a") as f:
+            f.write(generation_summary_markdown(
+                results,
+                sample_size=args.sample or len(dataset),
+                model=args.model,
+                judge_model=args.judge,
+            ))
+        if not args.quiet:
+            print(f"\nJob summary appended to {args.summary}", file=sys.stderr)
+
+    exit_code = 0
+    if args.gate:
+        if "generation" not in results:
+            print("error: --gate requires --generation or --all", file=sys.stderr)
+            return 2
+        failures = check_generation_thresholds(results["generation"])
+        if failures:
+            print("\nGeneration gate FAILED:", file=sys.stderr)
+            for failure in failures:
+                print(f"  - {failure}", file=sys.stderr)
+            print(
+                "Thresholds: "
+                + ", ".join(
+                    f"{dim} >= {minimum:g}"
+                    for dim, minimum in GENERATION_THRESHOLDS.items()
+                ),
+                file=sys.stderr,
+            )
+            exit_code = 1
+        elif not args.quiet:
+            print("\nGeneration gate passed.", file=sys.stderr)
+
+    if not args.quiet:
+        if "retrieval" in results:
+            print(_format_scores_table(results["retrieval"]))
+        print(json.dumps(results, indent=2, default=str))
+
+    return exit_code
+
+
+def _format_metric(value: float | None) -> str:
+    return f"{value:.2f}" if value is not None else "-"
 
 
 def _percent_change(old: float, new: float) -> str:
@@ -208,7 +280,7 @@ def _percent_change(old: float, new: float) -> str:
     return f"{sign}{pct:.0f}%"
 
 
-def _build_report(results: dict, stats: dict) -> str:
+def _build_report(results: dict, stats: dict, generation_meta: dict | None = None) -> str:
     """Build a markdown report from evaluation results."""
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
@@ -279,19 +351,39 @@ def _build_report(results: dict, stats: dict) -> str:
     if per_model:
         lines.append("## Generation (LLM-as-Judge)")
         lines.append("")
-        lines.append("| Model | Faithfulness | Relevance | Citation | n |")
-        lines.append("|-------|-------------|-----------|----------|---|")
+        if generation_meta:
+            lines.append(
+                f"Sampled eval: {generation_meta['sample']} entries generated by "
+                f"`{generation_meta['model']}`, scored 1-5 by `{generation_meta['judge']}`."
+            )
+            lines.append("")
+        lines.append("| Model | Faithfulness | Relevance | Citation | n | Cost/query |")
+        lines.append("|-------|-------------|-----------|----------|---|------------|")
         for model_name, mdata in per_model.items():
-            f = mdata.get("faithfulness_mean", "-")
-            r = mdata.get("relevance_mean", "-")
-            c = mdata.get("citation_correctness_mean", "-")
+            f = _format_metric(mean_score(mdata, "faithfulness"))
+            r = _format_metric(mean_score(mdata, "relevance"))
+            c = _format_metric(mean_score(mdata, "citation_correctness"))
             n = mdata.get("n", 0)
-            lines.append(f"| {model_name} | {f} | {r} | {c} | {n} |")
+            cost = mdata.get("avg_total_cost_usd")
+            if cost is None:
+                cost = mdata.get("avg_total_cost_usd_avg")
+            cost_cell = f"${cost:.4f}" if isinstance(cost, (int, float)) else "-"
+            lines.append(f"| {model_name} | {f} | {r} | {c} | {n} | {cost_cell} |")
         lines.append("")
 
     lines.append("---")
     lines.append(f"*Thresholds enforced in CI: recall@5 >= 60%, MRR >= 0.30, "
                  f"hybrid >= vector-only, hybrid >= BM25-only.*")
+    if per_model:
+        lines.append("")
+        gate = ", ".join(
+            f"{dim} >= {minimum:g}" for dim, minimum in GENERATION_THRESHOLDS.items()
+        )
+        lines.append(
+            f"*Generation gate (mean on the 1-5 judge scale): {gate}. "
+            "Citation correctness is reported but not gated — it is the noisiest "
+            "dimension.*"
+        )
 
     return "\n".join(lines) + "\n"
 
@@ -328,7 +420,4 @@ def _format_scores_table(retrieval_result: dict) -> str:
 
 
 if __name__ == "__main__":
-    results = main()
-    if "retrieval" in results:
-        print(_format_scores_table(results["retrieval"]))
-    print(json.dumps(results, indent=2, default=str))
+    sys.exit(main())

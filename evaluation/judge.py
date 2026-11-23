@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, Mapping
 
 import anthropic
 
@@ -137,6 +137,28 @@ reference the correct documentation sections? Are claims attributed to the right
 Return JSON on a single line: {{"score": <int 1-5>, "explanation": "<one concise sentence, max 20 words>"}}"""
 
 
+def _record_usage(
+    sink: dict[str, dict[str, int]] | None,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+) -> None:
+    """Add one judge call's tokens to the per-model sink (no-op when sink is None).
+
+    The generation eval reports measured cost, so judge spend has to be counted
+    the same way generation spend is: from the API response, not a guess.
+    """
+    if sink is None:
+        return
+    slot = sink.setdefault(
+        model, {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+    )
+    slot["input_tokens"] += input_tokens or 0
+    slot["output_tokens"] += output_tokens or 0
+    slot["cache_read_tokens"] += cache_read_tokens or 0
+
+
 def _score_single(
     client: anthropic.Anthropic,
     judge_model: str,
@@ -144,6 +166,7 @@ def _score_single(
     context: str,
     question: str,
     answer: str,
+    usage_sink: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Run a single LLM-as-judge scoring call.
 
@@ -170,6 +193,14 @@ def _score_single(
             ),
         )
         raw = (response.text or "").strip()
+        meta = getattr(response, "usage_metadata", None)
+        if meta is not None:
+            _record_usage(
+                usage_sink,
+                judge_model,
+                getattr(meta, "prompt_token_count", 0) or 0,
+                getattr(meta, "candidates_token_count", 0) or 0,
+            )
     else:
         response = with_retries(
             client.messages.create,
@@ -179,6 +210,15 @@ def _score_single(
             messages=[{"role": "user", "content": filled}],
         )
         raw = response.content[0].text.strip()
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            _record_usage(
+                usage_sink,
+                judge_model,
+                getattr(usage, "input_tokens", 0) or 0,
+                getattr(usage, "output_tokens", 0) or 0,
+                getattr(usage, "cache_read_input_tokens", 0) or 0,
+            )
     # Strip markdown code fences if the judge wraps JSON in ```json ... ```
     raw = re.sub(r'^```(?:json)?\s*\n?', '', raw)
     raw = re.sub(r'\n?```\s*$', '', raw)
@@ -234,6 +274,7 @@ def evaluate_generation(
     answer: str,
     context_chunks: list[dict[str, Any]],
     judge_model: str = "claude-haiku-4-5",
+    usage_sink: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Score a single generated answer on all three dimensions.
 
@@ -243,6 +284,9 @@ def evaluate_generation(
         answer: The generated answer to evaluate
         context_chunks: The retrieved chunks that were provided as context
         judge_model: Model to use for judging (Haiku is cheaper/faster)
+        usage_sink: Optional accumulator for judge token usage, keyed by model.
+            The evaluation harness uses it to report what a run actually cost;
+            the inline production path (score_faithfulness) leaves it unset.
 
     Returns:
         Dict with faithfulness, relevance, citation scores and explanations.
@@ -261,6 +305,7 @@ def evaluate_generation(
         result = _score_single(
             client, judge_model, prompt,
             context=context_str, question=question, answer=answer,
+            usage_sink=usage_sink,
         )
         metrics[name] = result
 
@@ -274,10 +319,12 @@ def compare_models(
     answers: dict[str, str],  # {"model_name": "answer text"}
     context_chunks: list[dict[str, Any]],
     judge_model: str = "claude-haiku-4-5",
+    usage_sinks: Mapping[str, dict[str, dict[str, int]]] | None = None,
 ) -> dict[str, Any]:
     """Score multiple model answers on the same question for comparison.
 
-    Returns scores per model across all three dimensions.
+    ``usage_sinks`` maps generation model name to its judge-token accumulator,
+    so a comparison run can attribute judge spend per model.
     """
     results = {}
     for model_name, answer in answers.items():
@@ -287,5 +334,6 @@ def compare_models(
             answer=answer,
             context_chunks=context_chunks,
             judge_model=judge_model,
+            usage_sink=(usage_sinks or {}).get(model_name),
         )
     return results

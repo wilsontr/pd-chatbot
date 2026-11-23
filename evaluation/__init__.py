@@ -12,3 +12,5 @@
 #   python -m evaluation.evaluate --model claude-haiku-4-5  # override generation model
 #   python -m evaluation.export_feedback --rating down     # feedback → review file
 #                                                          # (never edits the golden set)
+#   python -m evaluation.evaluate --generation --sample 10 --gate
+#                                                          # CI generation gate

@@ -176,6 +176,9 @@ def run_generation_eval(
         models_to_run.extend(m for m in compare if m != model)
 
     results: dict[str, list[dict[str, Any]]] = {m: [] for m in models_to_run}
+    # Judge-token accumulator per generation model: {model: {judge_model: counts}}.
+    # Measured, not estimated, so the CI job summary can state what a run cost.
+    judge_usage: dict[str, dict[str, dict[str, int]]] = {m: {} for m in models_to_run}
 
     for i, entry in enumerate(entries):
         if verbose:
@@ -209,6 +212,7 @@ def run_generation_eval(
                 answers=model_answers,
                 context_chunks=chunks,
                 judge_model=judge_model,
+                usage_sinks=judge_usage,
             )
             # Flatten: scores = {"sonnet": {"faithfulness": {...}, ...}, "haiku": {...}}
             for m_name, m_scores in scores.items():
@@ -231,6 +235,7 @@ def run_generation_eval(
                 answer=model_answers[m],
                 context_chunks=chunks,
                 judge_model=judge_model,
+                usage_sink=judge_usage[m],
             )
             entry_result = {
                 "entry_id": entry.id,
@@ -269,6 +274,27 @@ def run_generation_eval(
                 model_summary[f"{dim}_max"] = max(scores)
 
         usages = [e["usage"] for e in entries_list if e.get("usage")]
+        judge_usages = judge_usage.get(m_name, {})
+        judge_costs = [
+            _cost_usd(judge_model_name, u) for judge_model_name, u in judge_usages.items()
+        ]
+        judge_costs = [c for c in judge_costs if c is not None]
+
+        if judge_usages:
+            model_summary["judge_input_tokens"] = sum(
+                u["input_tokens"] for u in judge_usages.values()
+            )
+            model_summary["judge_output_tokens"] = sum(
+                u["output_tokens"] for u in judge_usages.values()
+            )
+        if judge_costs:
+            judge_cost = sum(judge_costs)
+            model_summary["judge_cost_usd"] = round(judge_cost, 5)
+            if entries_list:
+                model_summary["avg_judge_cost_usd"] = round(
+                    judge_cost / len(entries_list), 5
+                )
+
         if usages:
             avg_input = sum(u["input_tokens"] for u in usages) / len(usages)
             avg_output = sum(u["output_tokens"] for u in usages) / len(usages)
@@ -282,6 +308,14 @@ def run_generation_eval(
                 avg_cost = sum(costs) / len(costs)
                 model_summary["avg_cost_usd"] = round(avg_cost, 5)
                 model_summary["cost_per_1000_queries_usd"] = round(avg_cost * 1000, 2)
+                judge_total = sum(judge_costs)
+                model_summary["run_total_cost_usd"] = round(
+                    sum(costs) + judge_total, 5
+                )
+                if entries_list:
+                    model_summary["avg_total_cost_usd"] = round(
+                        (sum(costs) + judge_total) / len(entries_list), 5
+                    )
 
         summary["per_model"][m_name] = model_summary
 

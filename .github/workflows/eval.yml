@@ -7,14 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      run_generation:
-        description: 'Run generation (LLM-as-judge) eval'
-        type: boolean
-        default: false
       sample:
         description: 'Number of generation samples'
         type: string
-        default: '5'
+        default: '10'
 
 # Prevent concurrent eval runs on the same branch from racing each
 # other when auto-committing EVAL.md.  Without this, two pushes in
@@ -26,7 +22,7 @@ concurrency:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: write  # needed for auto-commit of EVAL.md
 
@@ -48,12 +44,33 @@ jobs:
         run: |
           python embed_and_index.py
 
-      - name: Run retrieval evaluation
+      # PRs already get a sampled generation gate from generation-eval.yml when
+      # they touch prompts or evaluation/**, so this path stays retrieval-only.
+      - name: Run retrieval evaluation (pull request)
+        if: github.event_name == 'pull_request'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
         run: |
           python -m evaluation.evaluate --retrieval --report docs/EVAL.md --quiet
+
+      # main / manual: retrieval plus a cost-bounded generation sample, so the
+      # published report carries current generation numbers and a regression on
+      # main fails the build instead of silently degrading answers.
+      - name: Run full evaluation (retrieval + sampled generation)
+        if: github.event_name != 'pull_request'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          SAMPLE: ${{ github.event.inputs.sample || '10' }}
+        run: |
+          python -m evaluation.evaluate \
+            --all \
+            --sample "$SAMPLE" \
+            --report docs/EVAL.md \
+            --gate \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --quiet
 
       - name: Commit updated EVAL.md
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -63,14 +80,6 @@ jobs:
           file_pattern: docs/EVAL.md
           commit_user_name: github-actions[bot]
           commit_user_email: github-actions[bot]@users.noreply.github.com
-
-      - name: Run generation evaluation (sampled)
-        if: github.event_name == 'workflow_dispatch' && inputs.run_generation
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-        run: |
-          python -m evaluation.evaluate --generation --sample ${{ inputs.sample }} --quiet
 
       - name: Run pytest (threshold assertions)
         env:
