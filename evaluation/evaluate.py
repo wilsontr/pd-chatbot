@@ -11,7 +11,7 @@ Usage:
     python -m evaluation.evaluate --generation --judge gemini-3.1-pro-preview  # judge outside the compared vendor families, needs GEMINI_API_KEY
     python -m evaluation.evaluate --generation --trials 3  # repeat the full run N times, report mean/std across trials
     python -m evaluation.evaluate --generation --sample 5
-    python -m evaluation.evaluate --retrieval --report EVAL.md
+    python -m evaluation.evaluate --retrieval --report docs/EVAL.md
 """
 
 import argparse
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> dict:
     )
     parser.add_argument(
         "--report", type=str, default=None,
-        help="Write a markdown report to the given path (e.g. --report EVAL.md)"
+        help="Write a markdown report to the given path (e.g. --report docs/EVAL.md)"
     )
     parser.add_argument(
         "--quiet", action="store_true",

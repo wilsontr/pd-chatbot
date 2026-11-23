@@ -44,7 +44,7 @@ At query time, `rag.py` runs a hybrid search:
 4. **Reciprocal Rank Fusion (RRF)** — combines vector and BM25 rankings into a single ranked list
 5. **Parent retrieval** — the top child chunks are mapped back to their full parent sections for richer context
 
-Retrieval quality is measured and regressed in CI — see **[Evaluation Results](EVAL.md)** for current hybrid RRF vs. vector-only vs. BM25-only metrics.
+Retrieval quality is measured and regressed in CI — see **[Evaluation Results](docs/EVAL.md)** for current hybrid RRF vs. vector-only vs. BM25-only metrics.
 
 ### Response Generation
 
@@ -71,7 +71,7 @@ quality and guard against regressions.
 | Vector-only | 73% | 0.61 |
 | BM25-only | 37% | 0.26 |
 
-Current numbers are published in **[EVAL.md](EVAL.md)**, updated on every push to
+Current numbers are published in **[EVAL.md](docs/EVAL.md)**, updated on every push to
 `main` by a GitHub Actions workflow.
 
 **Retrieval metrics**: recall@k, MRR, nDCG — with ablation against
@@ -148,8 +148,8 @@ A [GitHub Actions workflow](.github/workflows/eval.yml) runs on every push and
 PR:
 
 1. Builds ChromaDB from committed chunk files
-2. Runs the retrieval evaluation (recall@k, MRR, nDCG) and writes `EVAL.md`
-3. Auto-commits `EVAL.md` to `main` (skips on PRs)
+2. Runs the retrieval evaluation (recall@k, MRR, nDCG) and writes `docs/EVAL.md`
+3. Auto-commits `docs/EVAL.md` to `main` (skips on PRs)
 4. Runs `pytest tests/` with threshold assertions
 
 Requires `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY` set as [repository secrets](https://github.com/wilsontr/pd-chatbot/settings/secrets/actions).

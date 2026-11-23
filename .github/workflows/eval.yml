@@ -53,14 +53,14 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
         run: |
-          python -m evaluation.evaluate --retrieval --report EVAL.md --quiet
+          python -m evaluation.evaluate --retrieval --report docs/EVAL.md --quiet
 
       - name: Commit updated EVAL.md
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: 'ci: update evaluation results [skip ci]'
-          file_pattern: EVAL.md
+          file_pattern: docs/EVAL.md
           commit_user_name: github-actions[bot]
           commit_user_email: github-actions[bot]@users.noreply.github.com
 
