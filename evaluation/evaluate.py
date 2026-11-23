@@ -372,10 +372,12 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
         lines.append("")
 
     lines.append("---")
-    lines.append(f"*Thresholds enforced in CI: recall@5 >= 60%, MRR >= 0.30, "
-                 f"hybrid >= vector-only, hybrid >= BM25-only.*")
+    if retrieval:
+        lines.append(f"*Thresholds enforced in CI: recall@5 >= 60%, MRR >= 0.30, "
+                     f"hybrid >= vector-only, hybrid >= BM25-only.*")
     if per_model:
-        lines.append("")
+        if retrieval:
+            lines.append("")
         gate = ", ".join(
             f"{dim} >= {minimum:g}" for dim, minimum in GENERATION_THRESHOLDS.items()
         )

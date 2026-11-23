@@ -21,6 +21,8 @@ from typing import Any, Mapping
 
 import anthropic
 
+from llm_response import text_of
+
 from .retry import with_retries
 
 logger = logging.getLogger(__name__)
@@ -209,7 +211,7 @@ def _score_single(
             system=JUDGE_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": filled}],
         )
-        raw = response.content[0].text.strip()
+        raw = text_of(response).strip()
         usage = getattr(response, "usage", None)
         if usage is not None:
             _record_usage(

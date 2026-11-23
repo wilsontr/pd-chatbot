@@ -16,6 +16,7 @@ from rank_bm25 import BM25Okapi
 import anthropic
 from langfuse import get_client as _get_langfuse
 from pd_schema import PdPatch
+from llm_response import text_of
 from evaluation.judge import score_faithfulness
 from evaluation.retry import with_retries
 
@@ -169,8 +170,8 @@ def _compress_history(history: list[HistoryItem]) -> list[HistoryItem]:
                     )
                 }]
             )
-        gen.update(output=resp.content[0].text, usage_details=_token_usage(resp))
-    summary = resp.content[0].text.strip()
+        gen.update(output=text_of(resp), usage_details=_token_usage(resp))
+    summary = text_of(resp).strip()
     logger.info("compressed %d history items into summary", len(old))
 
     return [
@@ -217,7 +218,7 @@ Return only the JSON object, no other text."""
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}]
             )
-        raw = response.content[0].text.strip()
+        raw = text_of(response).strip()
         raw = re.sub(r'^```(?:json)?\s*\n', '', raw)
         raw = re.sub(r'\n```\s*$', '', raw)
         raw = raw.strip()
@@ -483,8 +484,8 @@ def generate_response(question: str, context_chunks: list[Chunk], history: list[
             system=system_block,
             messages=messages
         )
-        obs.update(output=response.content[0].text, usage_details=_token_usage(response))
-    return response.content[0].text
+        obs.update(output=text_of(response), usage_details=_token_usage(response))
+    return text_of(response)
 
 
 @newrelic.agent.function_trace()

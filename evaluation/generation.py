@@ -16,6 +16,8 @@ from typing import Any
 import anthropic
 import openai
 
+from llm_response import text_of
+
 from .dataset import GoldenDataset
 from .judge import evaluate_generation, compare_models
 from .retry import with_retries
@@ -38,18 +40,42 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 _DEEPSEEK_MAX_TOKENS = {
     "deepseek-v4-pro": 16000,
 }
+
+# Claude 5.5 models think before answering by default, and those tokens count
+# against max_tokens. 4096 can therefore be spent on reasoning with the answer
+# truncated mid-sentence, which would score the model down for a budget problem
+# rather than a quality one. Same treatment as deepseek-v4-pro above.
+_MAX_TOKENS_OVERRIDES = {
+    "claude-sonnet-5-5": 16000,
+    "claude-haiku-5-5": 16000,
+}
 _DEFAULT_MAX_TOKENS = 4096
 
 _deepseek_client: openai.OpenAI | None = None
 
-# $ per million tokens, pulled from published pricing (platform.claude.com/docs and
-# api-docs.deepseek.com) at the time this was written — check current rates before
-# relying on this for anything beyond relative comparison.
+# $ per million tokens, synced 2026-11-23 from the published price sheets:
+#   Anthropic: https://platform.claude.com/docs/en/about-claude/pricing
+#              (mirrored per-model at https://benchlm.ai/anthropic/api-pricing)
+#   DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing/
+#              (mirrored per-model at https://benchlm.ai/deepseek/api-pricing)
+#
+# Two conventions, both deliberate:
+#   * DeepSeek bills on a peak schedule (01:00-04:00 and 06:00-10:00 UTC Mon-Fri)
+#     and at half price off-peak. The table records PEAK rates, so a reported cost
+#     is an upper bound — off-peak runs are cheaper than reported, never dearer.
+#   * An id that is missing here reports no cost (None) rather than a stale one.
+#     Retired ids are removed on purpose: `deepseek-v4-flash` was retired on
+#     2026-09-10 and its replacement is served as `deepseek-flash`. Re-add an id
+#     only with a rate you have just read off the sheet.
 PRICING_PER_MTOK: dict[str, dict[str, float]] = {
+    # Anthropic (flat pricing, no peak/off-peak)
     "claude-sonnet-4-6": {"input": 3.00, "cache_read": 0.30, "output": 15.00},
+    "claude-sonnet-5-5": {"input": 2.00, "cache_read": 0.10, "output": 10.00},
     "claude-haiku-4-5": {"input": 1.00, "cache_read": 0.10, "output": 5.00},
-    "deepseek-v4-flash": {"input": 0.14, "cache_read": 0.0028, "output": 0.28},
-    "deepseek-v4-pro": {"input": 0.435, "cache_read": 0.003625, "output": 0.87},
+    "claude-haiku-5-5": {"input": 0.10, "cache_read": 0.01, "output": 0.50},
+    # DeepSeek (peak rates; half price off-peak)
+    "deepseek-flash": {"input": 0.30, "cache_read": 0.006, "output": 1.20},
+    "deepseek-v4-pro": {"input": 1.32, "cache_read": 0.044, "output": 3.96},
 }
 
 
@@ -58,7 +84,9 @@ def _is_deepseek_model(model: str) -> bool:
 
 
 def _max_tokens_for(model: str) -> int:
-    return _DEEPSEEK_MAX_TOKENS.get(model, _DEFAULT_MAX_TOKENS)
+    return _MAX_TOKENS_OVERRIDES.get(
+        model, _DEEPSEEK_MAX_TOKENS.get(model, _DEFAULT_MAX_TOKENS)
+    )
 
 
 def _cost_usd(model: str, usage: dict[str, int]) -> float | None:
@@ -131,7 +159,7 @@ def _generate(
     response = with_retries(
         client.messages.create,
         model=model,
-        max_tokens=4096,
+        max_tokens=_max_tokens_for(model),
         system=system_block,
         messages=messages,
     )
@@ -141,7 +169,7 @@ def _generate(
         "output_tokens": u.output_tokens,
         "cache_read_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
     }
-    return response.content[0].text, usage
+    return text_of(response), usage
 
 
 def run_generation_eval(
