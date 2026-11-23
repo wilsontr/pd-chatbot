@@ -1,11 +1,11 @@
 ---
 id: TASK-1
 title: Feedback records collide across users and lose context
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-23 20:39'
-updated_date: '2026-11-23 20:57'
+updated_date: '2026-11-23 21:48'
 labels:
   - feedback
   - backend
@@ -32,11 +32,11 @@ The feedback loop (thumbs up/down to a data flywheel) is only useful if each rat
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Each assistant response gets a unique message id, separate from the response-cache key
-- [ ] #2 Two users rating the same question produce two stored feedback rows
-- [ ] #3 Feedback rows contain the question, answer and retrieved chunks even when the rating arrives after the response cache entry has expired
-- [ ] #4 Feedback storage survives a Railway redeploy (mounted volume or external database), and the README says how it is configured
-- [ ] #5 Tests cover duplicate-question ratings and post-eviction ratings
+- [x] #1 Each assistant response gets a unique message id, separate from the response-cache key
+- [x] #2 Two users rating the same question produce two stored feedback rows
+- [x] #3 Feedback rows contain the question, answer and retrieved chunks even when the rating arrives after the response cache entry has expired
+- [x] #4 Feedback storage survives a Railway redeploy (mounted volume or external database), and the README says how it is configured
+- [x] #5 Tests cover duplicate-question ratings and post-eviction ratings
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -62,4 +62,22 @@ Investigation 2026-11-23:
 2026-11-23 20:53 UTC: Added Railway Postgres (service "Postgres", id cd8f23d1-5c50-410c-ad8e-fdaa461eb803) to project "pd chatbot"/production; it deployed successfully. Side effect: adding the service triggered a redeploy of pd-chatbot on the same commit (deployment 09677a0f-d788-416f-917d-8690cd1143ea). When that goes live it replaces the container holding the old feedback.db. Cancelling it from the agent session was not permitted; the user needs to cancel it or save feedback.db first. DATABASE_URL is not yet set on pd-chatbot. Code changes (feedback_store.py, main.py, rag.py, tests/test_feedback.py) pass 14 tests on SQLite and a scratch Postgres.
 
 2026-11-23: The redeploy 09677a0f went live, so the pre-fix feedback.db is gone. Set DATABASE_URL=${{Postgres.DATABASE_URL}} on pd-chatbot (resolves to postgres.railway.internal:5432); the IaC config on claude/railway-iac-migration leaves variables unmanaged, so there is no drift. README documents the storage setup. Remaining: commit and push the fix to main, then verify on the deployed app that a chat plus a rating writes rows to Postgres and that a redeploy keeps them (AC #4).
+
+2026-11-23 verification after pushing bc82d5e (Railway deployment 487bf799, SUCCESS, /health 200, no "DATABASE_URL is not set" warning in startup logs):
+- Live check through https://pd-chatbot.vercel.app: asked "What does the osc~ object do?"; the done event carried message_id 4fc54205982d45da889939f4943cecff (random UUID, not a question hash), the feedback buttons appeared, and POST /api/feedback returned 200, which the new code only returns when the response row exists.
+- tests/test_feedback.py: 9 passed on SQLite; 14 passed earlier including a scratch Postgres via TEST_DATABASE_URL.
+- AC #4 not yet proven: Postgres has no public proxy, so the rows could not be queried from the agent machine, and no app redeploy has happened since the test rating. Check the Postgres service Data tab in the Railway dashboard for the row above after the next redeploy.
+- Unrelated: production startup logs show Langfuse running without LANGFUSE_PUBLIC_KEY, so tracing is disabled in production.
+
+2026-11-23: User confirmed message_id 4fc54205982d45da889939f4943cecff is present in the production Postgres `responses` and `ratings` tables, so writes go to Postgres, not the container. Logs show the test chat (21:11:19) and rating (21:11:49) were served by deployment cd428bf1, which started at 21:10:53, so no app redeploy has happened since the rating. AC #4 needs one more redeploy followed by the same check. Redeploying from the agent session was not permitted.
+
+2026-11-23: Redeploy verified. Deployment 1eacd62a was created at 21:45:15 UTC and the app started at 21:46:48 UTC, replacing cd428bf1 (which served the 21:11:49 test rating). The user then confirmed message_id 4fc54205982d45da889939f4943cecff is still in the Postgres `responses` and `ratings` tables.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Feedback now survives redeploys and keeps one record per response. Every response gets a random message_id and is stored (question, answer, sources, query type) when it finishes streaming. Ratings go in a separate table that references the response, so they no longer depend on the 1-hour in-memory cache. Storage is a Railway Postgres service (DATABASE_URL=${{Postgres.DATABASE_URL}}) through the new `feedback_store.py`, with SQLite as the local fallback. Replayed ratings are ignored and unknown ids return 404. The README documents the setup.
+
+Verified by: tests/test_feedback.py (9 passing on SQLite, 14 including a scratch Postgres); a live chat and rating on https://pd-chatbot.vercel.app (UUID message_id, /feedback 200); the user confirming the row in production Postgres; and the row still being there after redeploy 1eacd62a. The pre-fix feedback.db was lost when adding Postgres triggered a redeploy. Committed in bc82d5e.
+<!-- SECTION:FINAL_SUMMARY:END -->
