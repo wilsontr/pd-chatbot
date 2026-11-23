@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@deepseek'
 created_date: '2026-11-23 20:39'
-updated_date: '2026-11-23 21:59'
+updated_date: '2026-11-23 22:04'
 labels:
   - feedback
   - evaluation
@@ -59,6 +59,12 @@ Verification:
 - git status confirms no golden_dataset*.json changed.
 
 Environment notes (not caused by this change): test_evaluation.py, test_guardrails.py and test_pd_schema.py cannot be collected here because rag.py needs the Chroma index and there is no VOYAGE_API_KEY to build it (CI builds it in eval.yml). Separately, in this agent sandbox 'python -m evaluation.<new module>' intermittently reported 'No module named ...' for freshly written files while 'from evaluation.feedback_export import main' always worked; clearing evaluation/__pycache__ made it stable. Not reproducible from the code and not present in a normal checkout.
+
+Full-suite update after VOYAGE_API_KEY was added to .env:
+- Built the local Chroma index with embed_and_index.py (2503 child chunks embedded via voyage-3-lite). parent_lookup.json came out byte-identical, so no generated artifact changed.
+- pytest tests/: 72 passed, 4 failed. tests/test_guardrails.py and tests/test_pd_schema.py, which could not even be collected before the index existed, now pass.
+- The 4 failures are tests/test_evaluation.py::test_retrieval_{recall,mrr}_threshold and test_hybrid_beats_{vector_only,bm25_only}. They are pre-existing and unrelated to this task: rag.retrieve() classifies the query with claude-haiku-4-5 and there is no heuristic fallback, so with no ANTHROPIC_API_KEY every entry raises an auth error, which run_retrieval_eval swallows, leaving recall 0.0000. Ran the same four tests in a worktree at d33a207 (the commit before this task) against the same index and env: identical 4 failures. They need ANTHROPIC_API_KEY, which CI supplies via secrets.
+- Consequence: TASK-2's own evidence stands (35/35 feedback and export tests pass); the retrieval thresholds remain unverified locally until an Anthropic key is available.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
