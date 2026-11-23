@@ -1,11 +1,11 @@
 # main.py
+import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
-import sqlite3
 import time
-import threading
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -18,7 +18,10 @@ from typing import List, Literal, Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from rag import _response_cache, async_stream_chat, _langfuse, _cache_lock, _chunks_to_sources
+from feedback_store import FeedbackStore, UnknownMessageError
+from rag import _response_cache, async_stream_chat, _langfuse
+
+logger = logging.getLogger(__name__)
 
 # --- Rate limiter ---
 # Behind Vercel's edge all requests arrive from a Vercel datacenter IP, so
@@ -83,26 +86,8 @@ def _verify_hmac(payload_signature: str, key: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-# --- SQLite feedback store ---
-_feedback_conn = sqlite3.connect("feedback.db", check_same_thread=False)
-_feedback_conn.execute("PRAGMA journal_mode=WAL")
-_feedback_conn.execute("PRAGMA busy_timeout=5000")
-_feedback_lock = threading.Lock()
-with _feedback_lock:
-    _feedback_conn.execute("""
-        CREATE TABLE IF NOT EXISTS feedback (
-            message_id TEXT PRIMARY KEY,
-            question   TEXT NOT NULL,
-            answer     TEXT,
-            chunks     TEXT,
-            query_type TEXT,
-            rating     TEXT NOT NULL CHECK (rating IN ('up', 'down')),
-            comment    TEXT DEFAULT '',
-            timestamp  INTEGER NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    _feedback_conn.commit()
+# --- Feedback store (Postgres via DATABASE_URL, SQLite locally) ---
+feedback_store = FeedbackStore()
 
 # --- Request / response models ---
 class HistoryItem(BaseModel):
@@ -142,7 +127,29 @@ async def chat_endpoint(request: Request, req: ChatRequest):
     history_dicts = [h.model_dump() for h in req.history]
 
     async def generate():
+        # Capture the response as it streams so it can be stored with its own id
+        # when it completes. Feedback then refers to this stored row, not to the
+        # in-memory response cache (which is keyed by question and expires).
+        answer_parts: list[str] = []
+        sources: list[dict] = []
+        query_type = ""
         async for event in async_stream_chat(req.message, history_dicts):
+            if event["type"] == "meta":
+                sources = event.get("sources", [])
+                query_type = event.get("query_type", "")
+            elif event["type"] == "chunk":
+                answer_parts.append(event["text"])
+            elif event["type"] == "done":
+                try:
+                    event["message_id"] = await asyncio.to_thread(
+                        feedback_store.save_response,
+                        req.message, "".join(answer_parts), sources, query_type,
+                    )
+                except Exception:
+                    # Never fail the chat because storage is down; without an id
+                    # the frontend simply hides the feedback buttons.
+                    logger.exception("failed to store response for feedback")
+                    event["message_id"] = None
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
@@ -162,21 +169,13 @@ async def feedback_endpoint(request: Request, req: FeedbackRequest):
     ):
         raise HTTPException(status_code=403, detail="Invalid signature")
 
-    question = answer = chunks_json = query_type = ""
-    with _cache_lock:
-        entry = _response_cache.get(req.message_id)
-    if entry is not None:
-        question, answer, chunks, classification, _ = entry
-        chunks_json = json.dumps(_chunks_to_sources(chunks))
-        query_type = classification.get("query_type", "")
-
-    with _feedback_lock:
-        _feedback_conn.execute(
-            "INSERT OR IGNORE INTO feedback (message_id, question, answer, chunks, query_type, rating, comment, timestamp) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (req.message_id, question, answer, chunks_json, query_type, req.rating, req.comment, int(req.timestamp)),
+    try:
+        await asyncio.to_thread(
+            feedback_store.save_rating,
+            req.message_id, req.rating, int(req.timestamp), req.comment,
         )
-        _feedback_conn.commit()
+    except UnknownMessageError:
+        raise HTTPException(status_code=404, detail="Unknown message")
 
     return {"status": "ok"}
 

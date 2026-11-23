@@ -14,3 +14,6 @@ requests
 newrelic
 langfuse
 pytest
+sqlalchemy
+psycopg[binary]
+httpx

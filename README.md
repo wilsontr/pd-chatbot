@@ -96,11 +96,13 @@ score).
 
 ### Feedback loop
 
-Every assistant response carries a `message_id` (SHA-256 of the question).
-Thumbs up/down buttons in the chat UI submit cryptographically-signed
-feedback (`POST /feedback`) to a SQLite store, capturing the question,
-answer, retrieved chunks, and rating. The data grows an eval set from real
-usage.
+Every assistant response is stored when it finishes streaming (question,
+answer, retrieved sources, query type) under its own random `message_id`,
+so two users asking the same question get separate records. Thumbs up/down
+buttons in the chat UI submit cryptographically-signed feedback
+(`POST /feedback`), which is stored against that response row. Ratings
+therefore keep their full context even after the in-memory response cache
+expires. The data grows an eval set from real usage.
 
 ### API auth
 
@@ -120,7 +122,7 @@ requires an HMAC-SHA256 signature over the payload, preventing replay attacks
 - slowapi — rate limiting (10/min `/chat`, 30/min `/feedback`)
 - New Relic APM — request tracing, external call instrumentation (Anthropic, Voyage AI), cache hit/miss metrics, pd-patch validation failure tracking
 - [Langfuse](https://langfuse.com) (self-hosted on Railway) — LLM-native tracing: token accounting (input/output/cache-read), trace trees (classify → embed → retrieve → generate), cost attribution
-- SQLite (`feedback.db`) — feedback store, no additional dependencies
+- Postgres (Railway) via SQLAlchemy — response and feedback store; falls back to a local SQLite file (`feedback.db`) when `DATABASE_URL` is unset
 
 **Frontend**
 - React 19 + TypeScript + Vite
@@ -141,6 +143,8 @@ The application is deployed as two separate services:
 The Vercel deployment rewrites `/api/*` to the Railway backend URL server-side, so the browser never makes cross-origin requests and CORS is not required for production.
 
 Railway runs `embed_and_index.py` as part of the build step to construct ChromaDB from the committed chunk files (`child_chunks.json`, `parent_chunks.json`). ChromaDB itself is not committed — it is rebuilt on each deploy.
+
+Responses and feedback are stored in a Railway Postgres service in the same project. The backend service's `DATABASE_URL` variable is set to the reference `${{Postgres.DATABASE_URL}}`, which resolves to Postgres over Railway's private network. Tables are created on startup. The container filesystem is wiped on every deploy, so production must not run without `DATABASE_URL`; the backend logs a warning if it does.
 
 ### CI/CD
 
@@ -178,6 +182,8 @@ VOYAGE_API_KEY=...
 ANTHROPIC_API_KEY=...
 CHAT_API_KEYS=...            # comma-separated for rotation; e.g. "key1,key2"
 ALLOWED_ORIGIN=http://localhost:5173
+# Optional — response/feedback store; defaults to a local SQLite file (feedback.db)
+DATABASE_URL=postgresql://user:pass@host:5432/db
 # Optional — Langfuse LLM observability
 LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_PUBLIC_KEY=pk-lf-...

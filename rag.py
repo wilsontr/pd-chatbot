@@ -525,7 +525,7 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
         blocked = "I can only answer questions about Pure Data documentation. Please ask a question about Pd objects, patching concepts, or audio techniques."
         yield {"type": "meta", "sources": [], "query_type": "conceptual"}
         yield {"type": "chunk", "text": blocked}
-        yield {"type": "done", "history": history, "message_id": _make_cache_key(question)}
+        yield {"type": "done", "history": history}
         return
 
     root = _start_obs("chat", as_type="span", input=question,
@@ -552,7 +552,7 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
             root.update(output=answer[:500], metadata={"cache": "hit"})
             yield {"type": "meta", "sources": _chunks_to_sources(chunks), "query_type": classification["query_type"]}
             yield {"type": "chunk", "text": answer}
-            yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:], "message_id": key}
+            yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
             return
 
         newrelic.agent.record_custom_metric('Custom/Cache/Miss', 1)
@@ -569,7 +569,7 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
             root.update(output=answer, metadata={"retrieved_chunks": 0, "cache": "miss"})
             yield {"type": "meta", "sources": [], "query_type": classification["query_type"]}
             yield {"type": "chunk", "text": answer}
-            yield {"type": "done", "history": history, "message_id": key}
+            yield {"type": "done", "history": history}
             return
 
         yield {"type": "meta", "sources": _chunks_to_sources(context_chunks), "query_type": classification["query_type"]}
@@ -622,7 +622,7 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
         root.update(output=full_text[:500], metadata={"retrieved_chunks": len(context_chunks),
                                                       "query_type": classification["query_type"],
                                                       "cache": "miss"})
-        yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:], "message_id": key}
+        yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
 
     finally:
         root.end()
