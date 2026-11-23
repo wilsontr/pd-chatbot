@@ -135,7 +135,12 @@ class FeedbackStore:
         return True
 
     def get_feedback(self) -> list[dict]:
-        """All ratings joined with their response context, oldest first."""
+        """All ratings joined with their response context, oldest first.
+
+        ``rated_at`` is the server-side insert time. It is the date to filter or
+        report on: ``timestamp`` holds the client's clock, which can be skewed
+        inside the 60-second replay window.
+        """
         stmt = (
             select(
                 ratings.c.message_id,
@@ -146,6 +151,7 @@ class FeedbackStore:
                 ratings.c.rating,
                 ratings.c.comment,
                 ratings.c.timestamp,
+                ratings.c.created_at.label("rated_at"),
             )
             .join(responses, responses.c.message_id == ratings.c.message_id)
             .order_by(ratings.c.id)

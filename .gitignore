@@ -16,6 +16,9 @@ feedback.db
 feedback.db-wal
 feedback.db-shm
 
+# Exported golden-dataset candidates — user questions, review locally only
+evaluation/feedback_candidates*.json
+
 # macOS
 .DS_Store
 

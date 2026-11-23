@@ -10,3 +10,5 @@
 #   python -m evaluation.evaluate --retrieval    # retrieval only
 #   python -m evaluation.evaluate --generation   # generation only (LLM-as-judge)
 #   python -m evaluation.evaluate --model claude-haiku-4-5  # override generation model
+#   python -m evaluation.export_feedback --rating down     # feedback → review file
+#                                                          # (never edits the golden set)

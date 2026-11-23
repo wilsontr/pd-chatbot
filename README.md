@@ -83,6 +83,45 @@ correctness scored by a Claude-as-judge rubric (LLM-as-judge).
 **CI gating**: `pytest tests/` asserts thresholds (recall@5 ≥ 60%, MRR ≥
 0.30, hybrid ≥ both baselines). Runs on every PR and push.
 
+### From feedback to eval
+
+Every rated answer is stored with its question, answer and retrieved chunks
+(see [Feedback loop](#feedback-loop)), so real usage can feed the eval set.
+Downvotes are the most valuable input: they are questions the pipeline
+actually got wrong.
+
+```bash
+# all ratings, or filter by rating and UTC date range
+python -m evaluation.export_feedback --rating down --since 2026-11-01 --until 2026-11-30
+```
+
+The export writes **`evaluation/feedback_candidates.json`** by default: a
+review file, never the golden set. A plain JSON list in the
+`golden_dataset*.json` schema, it pre-fills what the stored row can supply:
+
+- `question`, `query_type` — copied from the response record
+- `relevant_chunk_ids` — resolved from the stored sources by
+  (heading, URL, source) against `parent_lookup.json`; anything that cannot
+  be resolved is left out and called out in `notes`
+- `difficulty` — `hard` for a downvote, `medium` for an upvote (a human can
+  override it)
+- `notes` — rating, comment, retrieved sources and the stored answer, plus
+  the `message_id` to trace the row back
+- `reference_answer` — deliberately empty; a good answer is what the
+  reviewer writes
+
+Promotion is manual, by design: the CLI refuses to write any
+`golden_dataset*.json` path. Review the candidates, copy the ones worth
+keeping into a golden dataset file (for example
+`golden_dataset_hard_batch3.json`), then run
+`python -m evaluation.evaluate --retrieval`. The review file is gitignored,
+because it contains user questions.
+
+Production rows live in Railway Postgres, which has no public proxy, so run
+the export from inside the Railway environment (`railway run python -m
+evaluation.export_feedback ...`) or point `--database-url` / `DATABASE_URL`
+at a dump. The command also works against the local SQLite `feedback.db`.
+
 ## Quality
 
 ### pd-patch validation
@@ -102,7 +141,8 @@ so two users asking the same question get separate records. Thumbs up/down
 buttons in the chat UI submit cryptographically-signed feedback
 (`POST /feedback`), which is stored against that response row. Ratings
 therefore keep their full context even after the in-memory response cache
-expires. The data grows an eval set from real usage.
+expires. The data grows an eval set from real usage — see
+[From feedback to eval](#from-feedback-to-eval).
 
 ### API auth
 
