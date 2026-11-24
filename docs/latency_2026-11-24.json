@@ -3,145 +3,145 @@
   "per_model": {
     "claude-sonnet-4-6": {
       "n": 10,
-      "ttft_mean_ms": 631.6,
-      "ttft_p50_ms": 630.8,
-      "ttft_p95_ms": 1125.1,
-      "total_mean_ms": 14323.5,
-      "total_p50_ms": 14911.2,
-      "total_p95_ms": 21304.3,
-      "avg_chars": 2321.0,
+      "ttft_mean_ms": 626.5,
+      "ttft_p50_ms": 669.2,
+      "ttft_p95_ms": 786.6,
+      "total_mean_ms": 13619.3,
+      "total_p50_ms": 13731.8,
+      "total_p95_ms": 19817.0,
+      "avg_chars": 2233.0,
       "measurements": [
         {
           "question": "What are the inlets of [osc~] and what do they do?",
-          "ttft_ms": 336.5,
-          "total_ms": 7348.2,
-          "chars": 1289
+          "ttft_ms": 690.0,
+          "total_ms": 7804.1,
+          "chars": 1267
         },
         {
           "question": "How do I use [dac~] to output audio to my sound card?",
-          "ttft_ms": 569.9,
-          "total_ms": 9773.7,
-          "chars": 1623
+          "ttft_ms": 294.5,
+          "total_ms": 9871.4,
+          "chars": 1677
         },
         {
           "question": "What is [phasor~] and how does it differ from [osc~]?",
-          "ttft_ms": 614.3,
-          "total_ms": 16107.0,
-          "chars": 2385
+          "ttft_ms": 715.2,
+          "total_ms": 14343.4,
+          "chars": 2178
         },
         {
           "question": "How does [line~] work and what's the gotcha with its right inlet?",
-          "ttft_ms": 670.7,
-          "total_ms": 17529.8,
-          "chars": 2872
+          "ttft_ms": 786.6,
+          "total_ms": 13057.3,
+          "chars": 2111
         },
         {
           "question": "What does [vcf~] do? What kind of filter is it?",
-          "ttft_ms": 318.9,
-          "total_ms": 13938.3,
-          "chars": 2326
+          "ttft_ms": 783.4,
+          "total_ms": 15378.7,
+          "chars": 2479
         },
         {
           "question": "How do I use [snapshot~] to read the current value of an audio signal?",
-          "ttft_ms": 647.2,
-          "total_ms": 12541.3,
-          "chars": 2090
+          "ttft_ms": 487.7,
+          "total_ms": 9937.1,
+          "chars": 1955
         },
         {
           "question": "How do [pack] and [unpack] work for assembling compound messages?",
-          "ttft_ms": 674.2,
-          "total_ms": 21304.3,
-          "chars": 3656
+          "ttft_ms": 778.1,
+          "total_ms": 19817.0,
+          "chars": 3148
         },
         {
           "question": "What is [route] used for and how does it differ from [select]?",
-          "ttft_ms": 794.5,
-          "total_ms": 16785.0,
-          "chars": 2675
+          "ttft_ms": 648.5,
+          "total_ms": 17748.1,
+          "chars": 2966
         },
         {
           "question": "How does [metro] work for creating rhythmic patterns?",
-          "ttft_ms": 564.7,
-          "total_ms": 15884.2,
-          "chars": 2374
+          "ttft_ms": 549.9,
+          "total_ms": 15115.5,
+          "chars": 2417
         },
         {
           "question": "What is [spigot] and how do I use it to gate messages?",
-          "ttft_ms": 1125.1,
-          "total_ms": 12022.9,
-          "chars": 1921
+          "ttft_ms": 531.2,
+          "total_ms": 13120.2,
+          "chars": 2136
         }
       ]
     },
     "claude-haiku-5-5": {
       "n": 10,
-      "ttft_mean_ms": 4713.2,
-      "ttft_p50_ms": 4921.9,
-      "ttft_p95_ms": 6127.4,
-      "total_mean_ms": 8077.1,
-      "total_p50_ms": 8580.0,
-      "total_p95_ms": 10058.1,
-      "avg_chars": 2129.0,
+      "ttft_mean_ms": 363.9,
+      "ttft_p50_ms": 362.0,
+      "ttft_p95_ms": 402.5,
+      "total_mean_ms": 3587.9,
+      "total_p50_ms": 3264.8,
+      "total_p95_ms": 5715.6,
+      "avg_chars": 2123.0,
       "measurements": [
         {
           "question": "What are the inlets of [osc~] and what do they do?",
-          "ttft_ms": 1353.6,
-          "total_ms": 1993.2,
-          "chars": 497
+          "ttft_ms": 389.6,
+          "total_ms": 2123.4,
+          "chars": 1134
         },
         {
           "question": "How do I use [dac~] to output audio to my sound card?",
-          "ttft_ms": 5780.1,
-          "total_ms": 9676.5,
-          "chars": 2266
+          "ttft_ms": 351.5,
+          "total_ms": 3189.7,
+          "chars": 1828
         },
         {
           "question": "What is [phasor~] and how does it differ from [osc~]?",
-          "ttft_ms": 4225.6,
-          "total_ms": 6842.6,
-          "chars": 1615
+          "ttft_ms": 354.8,
+          "total_ms": 4156.1,
+          "chars": 2411
         },
         {
           "question": "How does [line~] work and what's the gotcha with its right inlet?",
-          "ttft_ms": 5140.4,
-          "total_ms": 7872.0,
-          "chars": 1843
+          "ttft_ms": 357.7,
+          "total_ms": 3013.3,
+          "chars": 1750
         },
         {
           "question": "What does [vcf~] do? What kind of filter is it?",
-          "ttft_ms": 6127.4,
-          "total_ms": 10058.1,
-          "chars": 2557
+          "ttft_ms": 402.5,
+          "total_ms": 2057.0,
+          "chars": 1284
         },
         {
           "question": "How do I use [snapshot~] to read the current value of an audio signal?",
-          "ttft_ms": 4703.5,
-          "total_ms": 8405.0,
-          "chars": 2312
+          "ttft_ms": 341.7,
+          "total_ms": 3031.4,
+          "chars": 1771
         },
         {
           "question": "How do [pack] and [unpack] work for assembling compound messages?",
-          "ttft_ms": 5392.1,
-          "total_ms": 9474.0,
-          "chars": 2559
+          "ttft_ms": 366.3,
+          "total_ms": 5388.0,
+          "chars": 3333
         },
         {
           "question": "What is [route] used for and how does it differ from [select]?",
-          "ttft_ms": 4440.4,
-          "total_ms": 8754.9,
-          "chars": 2753
+          "ttft_ms": 373.7,
+          "total_ms": 3340.0,
+          "chars": 2198
         },
         {
           "question": "How does [metro] work for creating rhythmic patterns?",
-          "ttft_ms": 5799.1,
-          "total_ms": 10032.7,
-          "chars": 2650
+          "ttft_ms": 332.2,
+          "total_ms": 5715.6,
+          "chars": 3296
         },
         {
           "question": "What is [spigot] and how do I use it to gate messages?",
-          "ttft_ms": 4170.3,
-          "total_ms": 7661.5,
-          "chars": 2241
+          "ttft_ms": 369.1,
+          "total_ms": 3864.1,
+          "chars": 2222
         }
       ]
     }

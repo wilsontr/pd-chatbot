@@ -5,10 +5,11 @@ own gate because every run costs money, so it is sampled, run from CI rather
 than from pytest, and fails the build on a regression instead of asserting a
 threshold after the fact.
 
-Baseline measured 2026-11-24 on all 30 entries, 2 trials, with the shipping
-models (claude-haiku-5-5 generation, claude-haiku-4-5 judge, 1-5 rubric):
-faithfulness 4.92, relevance 4.87, citation correctness 4.58. Identical runs
-move a mean by up to ~0.1, so the thresholds sit a clear margin below the
+Baseline measured 2026-11-24 with the shipping configuration (claude-haiku-5-5
+with thinking disabled, claude-haiku-4-5 judge, 1-5 rubric), 30 entries on one
+trial: faithfulness 4.63, relevance 4.87, citation correctness 4.50; enable
+model-side thinking and citation rises to 4.58 with faithfulness 4.92. Identical
+runs move a mean by up to ~0.1, so the thresholds sit a clear margin below the
 observed means: tight enough to catch a prompt change that makes answers less
 grounded, loose enough that judge noise alone does not fail a PR.
 

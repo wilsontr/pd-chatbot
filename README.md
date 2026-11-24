@@ -51,9 +51,9 @@ Retrieval quality is measured and regressed in CI — see **[Evaluation Results]
 Retrieved chunks are passed as context to Claude Haiku 5.5 (see
 [`model_config.py`](model_config.py)), which streams a response grounded in the
 documentation via Server-Sent Events (SSE). The frontend renders tokens as they
-arrive; measured on 2026-11-24, the first token lands at ~4.7 s and a typical
-answer completes in ~8 s (the previous Sonnet 4.6 setup: ~0.6 s to first token,
-~14 s to complete). Responses may include:
+arrive; measured on 2026-11-24 with thinking disabled, the first token lands at
+~0.36 s and a typical answer completes in ~3.6 s (the previous Sonnet 4.6 setup:
+~0.63 s to first token, ~14 s to complete). Responses may include:
 
 - Inline `[object~]` references in code spans
 - Markdown tables for structured object comparisons

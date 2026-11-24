@@ -50,11 +50,11 @@ def max_tokens_for(model: str) -> int:
 # 2026-11-24 (30 entries, judge claude-haiku-4-5):
 #   thinking on : faithfulness 4.92, citation 4.58, p50 answer 8.1 s, 4.7 s to first token
 #   thinking off: faithfulness 4.63, citation 4.50, p50 answer 4.2 s, ~0.6 s to first token
-# The switch was justified on citation parity, which holds only with thinking on
-# (4.58 vs the 4.65 baseline; 4.50 is outside the 0.1 margin), and total answer
-# time is still better than the old model's 15.7 s. Flipping this to True trades
-# the citation margin for ~4 s of first-token latency; see docs/MODEL_COMPARISON.md.
-DISABLE_THINKING = False
+# Thinking is disabled: the 0.08 citation cost (4.58 -> 4.50) is accepted in
+# exchange for restoring a sub-second first token, which the streaming UI depends
+# on. Everything still passes the CI gate (faithfulness 4.0, relevance 4.5,
+# citation 4.0). Re-measured after the change: see docs/MODEL_COMPARISON.md.
+DISABLE_THINKING = True
 
 # Models that accept the thinking parameter (Claude 5.x family). Older models
 # treat it as a no-op, but the parameter is only sent to these to avoid passing

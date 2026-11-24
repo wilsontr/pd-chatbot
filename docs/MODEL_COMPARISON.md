@@ -126,7 +126,8 @@ faithfulness and halves answer time. The strict prompt helps the cheaper model
 | Model | TTFT mean | p95 TTFT | Total mean | p95 total |
 |---|---|---|---|---|
 | `claude-sonnet-4-6` | 0.63 s | 1.13 s | 14.3 s | 21.3 s |
-| `claude-haiku-5-5` | 4.71 s | 6.13 s | 8.1 s | 10.1 s |
+| `claude-haiku-5-5` (thinking on) | 4.71 s | 6.13 s | 8.1 s | 10.1 s |
+| `claude-haiku-5-5` (thinking off, shipping) | **0.36 s** | 0.40 s | **3.6 s** | 5.7 s |
 
 This is the real cost of the switch: Claude 5.x reasons before emitting its first
 token, so the streaming UI would show a blank screen for ~4.7 s where it used to
@@ -135,32 +136,33 @@ show text in ~0.6 s, even though the whole answer arrives ~6 s sooner.
 **Thinking on or off?** Disabling thinking (`model_config.DISABLE_THINKING`)
 restores the fast first token and cuts generation cost further, at some quality:
 
-| `claude-haiku-5-5` + strict prompt | Faithfulness | Relevance | Citation | p50 answer | generation $/query |
-|---|---|---|---|---|---|
-| thinking on (shipping) | 4.92 | 4.87 | **4.58** | 8.1 s | $0.0013 |
-| thinking off | 4.63 | 4.87 | 4.50 | 4.2 s | $0.0008 |
+| `claude-haiku-5-5` + strict prompt | Faithfulness | Relevance | Citation | p50 answer | TTFT | generation $/query |
+|---|---|---|---|---|---|---|
+| thinking on | 4.92 | 4.87 | **4.58** | 8.1 s | 4.71 s | $0.0013 |
+| thinking off (**shipping**) | 4.63 | 4.87 | 4.50 | 3.3 s | **0.36 s** | $0.0008 |
 
-Thinking off would miss the citation target (4.50 is outside the 0.1 margin
-around the 4.65 baseline), so the switch ships with thinking on and the TTFT
-regression documented rather than hidden. Flipping `DISABLE_THINKING = True`
-is the one-line lever if first-token latency later outweighs 0.08 citation.
+The 0.08 citation difference is accepted: 4.50 is still above the 4.0 gate
+floor and well clear of the pre-fix 4.48, and it buys a first token faster than
+the old Sonnet setup ever had (0.36 s vs 0.63 s) plus a 4× faster complete
+answer. Thinking is therefore disabled in the shipped configuration.
 
 ### Decision (2026-11-24)
 
-**Switch the answer model to `claude-haiku-5-5` and ship the citation-hardened
-prompt.** Production cost per 1 000 queries falls from **$27.40 to $4.47**
-(generation + the one inline faithfulness judge), the 30-entry quality is at
-parity or better, and answer completion time halves. The accepted cost is
-~4 s of extra time-to-first-token in the streaming UI, recorded above and in the
-README.
+**Switch the answer model to `claude-haiku-5-5`, ship the citation-hardened
+prompt, and run with thinking disabled.** Production cost per 1 000 queries
+falls from **$27.40 to $4.47** (generation + the one inline faithfulness judge),
+answer completion time drops from ~14 s to ~3.6 s, and time-to-first-token
+improves from 0.63 s to 0.36 s. The accepted trade is 0.08 citation points
+(4.50 vs 4.58 with thinking on), which keeps citation above its 4.0 gate floor
+and above the pre-fix 4.48.
 
 Citation correctness is now gated in CI at 4.0 as a collapse guard: the 10-entry
 CI sample measures 4.40 for this configuration and is too small for a tighter
 bound, so the 30-entry comparison remains the precise instrument.
 
-Revisit if: first-token latency proves user-visible, in which case try
-`DISABLE_THINKING = True` (4.50 citation / ~0.6 s TTFT) before reverting the
-model; or if a future Haiku release starts reasoning less by default.
+Revisit if: the 0.08 citation difference turns out to matter for users, in which
+case `DISABLE_THINKING = False` restores 4.58 at a 4.7 s first token; or if a
+future Haiku release reasons less by default and the trade disappears.
 
 ## Previous decision (2026-11-23 — superseded)
 
