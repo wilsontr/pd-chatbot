@@ -69,10 +69,8 @@ playable audio clip.
 meets its spec". Compare pipeline vs. agent, and agent with vs. without the
 sandbox.
 
-**Prerequisite:** `PdObject.type` in `pd_schema.py` only allows `obj`, `msg`,
-`floatatom` and `comment`, but the frontend renderer supports more box types
-(`table`/`array`, `bng`, `tgl`, sliders). Widen the schema before turning it
-into `.pd` files for execution.
+The `PdPatch` schema covers text boxes, data stores (`table`/`array`) and UI widgets
+(`bng`, `tgl`, sliders, radios, ...), matched by `frontend/src/types.ts` (TASK-5.2).
 
 **Concepts to learn:** tool-use loops, sandbox isolation (gVisor,
 Firecracker), verifier-driven self-correction.

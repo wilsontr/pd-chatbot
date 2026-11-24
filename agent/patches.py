@@ -15,24 +15,24 @@ import re
 
 import newrelic.agent
 
-from pd_schema import PdPatch
+from pd_schema import PD_OBJECT_TYPES, PdPatch
 
 logger = logging.getLogger(__name__)
 
 _PATCH_FENCE_RE = re.compile(r'```pd-patch\b\n?(.*?)```', re.DOTALL)
 
-RETRY_PROMPT = """Your previous response contained a pd-patch code block with invalid JSON.
+RETRY_PROMPT = f"""Your previous response contained a pd-patch code block with invalid JSON.
 
 Please fix the pd-patch JSON block to match this exact schema:
 ```json
-{
-  "objects": [{"id": "str", "type": "obj|msg|floatatom|comment", "text": "str", "inlets": int, "outlets": int}],
-  "connections": [{"srcId": "str", "srcOutlet": int, "dstId": "str", "dstInlet": int}]
-}
+{{
+  "objects": [{{"id": "str", "type": "{'|'.join(PD_OBJECT_TYPES)}", "text": "str", "inlets": int, "outlets": int}}],
+  "connections": [{{"srcId": "str", "srcOutlet": int, "dstId": "str", "dstInlet": int}}]
+}}
 ```
 
 Rules:
-- objects array: 1-15 items, each with id, type (one of obj/msg/floatatom/comment), text, inlets (>=0), outlets (>=0)
+- objects array: 1-15 items, each with id, type (one of {'/'.join(PD_OBJECT_TYPES)}), text, inlets (>=0), outlets (>=0)
 - connections array: unlimited, each with srcId, srcOutlet (>=0), dstId, dstInlet (>=0)
 - All id references in connections must match object ids
 

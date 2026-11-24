@@ -18,7 +18,15 @@ export interface HistoryItem {
   content: string
 }
 
-export type PdObjectType = 'obj' | 'msg' | 'floatatom' | 'comment'
+// Must match PdObjectType in pd_schema.py (checked by tests/test_pd_schema.py).
+// `text` is the box's Pd creation text; for a widget or data store it starts with
+// the type name, e.g. 'hsl 128 15 0 127' or 'table wave 512'.
+export type PdObjectType =
+  | 'obj' | 'msg' | 'floatatom' | 'comment'
+  // Named data stores
+  | 'table' | 'array'
+  // UI widgets
+  | 'bng' | 'tgl' | 'hsl' | 'vsl' | 'hradio' | 'vradio' | 'nbx' | 'vu' | 'cnv'
 
 export interface PdObject {
   id: string

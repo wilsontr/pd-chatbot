@@ -1,4 +1,5 @@
-import { layoutPatch, computeViewBox, estimateBoxWidth, BOX_H } from '../lib/pdLayout'
+import { layoutPatch, computeViewBox, graphicLabel } from '../lib/pdLayout'
+import type { LayoutNode } from '../lib/pdLayout'
 import type { PdPatch, PdObject } from '../types'
 
 const NUB_W = 7
@@ -29,12 +30,54 @@ function boxPoints(x: number, y: number, w: number, h: number, type: PdObject['t
     const T = 4  // tail height in px
     return pts([[x, y], [x+w, y], [x+w-C, y+T], [x+w-C, y+h-T], [x+w, y+h], [x, y+h]])
   }
-  if (type === 'floatatom') {
+  if (type === 'floatatom' || type === 'nbx') {
     // Rectangle with top-right corner cut at 45° (Pd number box shape)
     return pts([[x, y], [x+w-C, y], [x+w, y+C], [x+w, y+h], [x, y+h]])
   }
-  // Plain rectangle for obj (and fallback)
+  // Plain rectangle for obj, table, the graphic widgets (and fallback)
   return pts([[x, y], [x+w, y], [x+w, y+h], [x, y+h]])
+}
+
+// Interior of the graphic widgets, drawn over the body outline
+function WidgetFace({ type, pos: { x, y, w, h } }: { type: PdObject['type']; pos: LayoutNode }) {
+  const line = { stroke: '#000', strokeWidth: 1 }
+  const cells = Array.from({ length: 8 }, (_, i) => i)
+  switch (type) {
+    case 'bng':
+      return <circle cx={x + w / 2} cy={y + h / 2} r={w / 2 - 2} fill="none" {...line} />
+    case 'tgl':
+      return <path d={`M${x + 3},${y + 3}L${x + w - 3},${y + h - 3}M${x + w - 3},${y + 3}L${x + 3},${y + h - 3}`} {...line} />
+    case 'hsl':
+      return <line x1={x + w / 4} y1={y + 2} x2={x + w / 4} y2={y + h - 2} stroke="#000" strokeWidth={3} />
+    case 'vsl':
+      return <line x1={x + 2} y1={y + h * 0.75} x2={x + w - 2} y2={y + h * 0.75} stroke="#000" strokeWidth={3} />
+    case 'hradio':
+      return <>
+        {cells.slice(1).map(i => <line key={i} x1={x + i * w / 8} y1={y} x2={x + i * w / 8} y2={y + h} {...line} />)}
+        <rect x={x + 4} y={y + 4} width={w / 8 - 8} height={h - 8} fill="#000" />
+      </>
+    case 'vradio':
+      return <>
+        {cells.slice(1).map(i => <line key={i} x1={x} y1={y + i * h / 8} x2={x + w} y2={y + i * h / 8} {...line} />)}
+        <rect x={x + 4} y={y + 4} width={w - 8} height={h / 8 - 8} fill="#000" />
+      </>
+    case 'vu':
+      return <>
+        {cells.map(i => (
+          <rect key={i} x={x + 4} y={y + 4 + i * (h - 8) / 8} width={w - 8} height={(h - 8) / 8 - 2}
+            fill={i === 0 ? '#c33' : i < 3 ? '#cb3' : '#3a3'} />
+        ))}
+      </>
+    case 'array':
+      return <path d={`M${x},${y + h / 2}Q${x + w / 4},${y - h * 0.3} ${x + w / 2},${y + h / 2}T${x + w},${y + h / 2}`} fill="none" {...line} />
+    default:
+      return null
+  }
+}
+
+function boxFill(type: PdObject['type']): string {
+  if (type === 'cnv') return '#c8c8c8'
+  return type === 'array' ? '#fff' : '#dfdfdf'
 }
 
 function parsePatch(json: string): { patch: PdPatch } | { error: string } {
@@ -55,17 +98,18 @@ function parsePatch(json: string): { patch: PdPatch } | { error: string } {
   // Comments and known UI objects are intentionally standalone and are kept regardless.
   // Objects that are intentionally standalone — either UI widgets with no wires,
   // or named data stores accessed by name (table, array) rather than by connection.
-  const PD_UI_OBJECTS = new Set(['bng', 'tgl', 'hsl', 'vsl', 'hradio', 'vradio', 'vu', 'cnv', 'nbx', 'table', 'array'])
+  // Matches both the box type and an 'obj' box whose text names the object.
+  const STANDALONE = new Set<string>(['bng', 'tgl', 'hsl', 'vsl', 'hradio', 'vradio', 'vu', 'cnv', 'nbx', 'table', 'array'])
   const connected = new Set<string>()
   for (const c of patch.connections) {
     connected.add(c.srcId)
     connected.add(c.dstId)
   }
   const objects = patch.objects.filter(o => {
-    if (o.type === 'comment') return true
+    if (o.type === 'comment' || STANDALONE.has(o.type)) return true
     if (connected.has(o.id)) return true
     const objName = o.text?.trim().split(/\s+/)[0]
-    return PD_UI_OBJECTS.has(objName)
+    return STANDALONE.has(objName)
   })
   return { patch: { ...patch, objects } }
 }
@@ -105,7 +149,7 @@ export function PdPatchViewer({ json }: { json: string }) {
           const dstObj = objMap.get(conn.dstId)
           if (!src || !dst || !srcObj || !dstObj) return null
           const x1 = nubCenterX(src.x, src.w, conn.srcOutlet, srcObj.outlets)
-          const y1 = src.y + BOX_H + NUB_H
+          const y1 = src.y + src.h + NUB_H
           const x2 = nubCenterX(dst.x, dst.w, conn.dstInlet, dstObj.inlets)
           const y2 = dst.y - NUB_H
           return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#000" strokeWidth={1.5} />
@@ -115,7 +159,8 @@ export function PdPatchViewer({ json }: { json: string }) {
         {patch.objects.map(obj => {
           const pos = layout.get(obj.id)
           if (!pos) return null
-          const { x, y, w } = pos
+          const { x, y, w, h } = pos
+          const label = graphicLabel(obj)
 
           if (obj.type === 'comment') {
             return (
@@ -135,19 +180,20 @@ export function PdPatchViewer({ json }: { json: string }) {
           return (
             <g key={obj.id}>
               <polygon
-                points={boxPoints(x, y, w, BOX_H, obj.type)}
-                fill="#dfdfdf"
+                points={boxPoints(x, y, w, h, obj.type)}
+                fill={boxFill(obj.type)}
                 stroke="#000"
                 strokeWidth={1}
               />
+              <WidgetFace type={obj.type} pos={pos} />
               <text
-                x={x + BOX_PAD_X}
-                y={y + BOX_H / 2 + FONT_SIZE * 0.35}
+                x={label ? pos.labelX : x + BOX_PAD_X}
+                y={y + h / 2 + FONT_SIZE * 0.35}
                 fill="#000"
                 fontFamily='"Courier New", Courier, monospace'
                 fontSize={FONT_SIZE}
               >
-                {obj.text}
+                {label || obj.text}
               </text>
               {/* Inlet nubs — protrude upward from top edge */}
               {Array.from({ length: obj.inlets }, (_, i) => (
@@ -165,7 +211,7 @@ export function PdPatchViewer({ json }: { json: string }) {
                 <rect
                   key={`out${i}`}
                   x={nubLeft(x, w, i, obj.outlets)}
-                  y={y + BOX_H}
+                  y={y + h}
                   width={NUB_W}
                   height={NUB_H}
                   fill="#000"

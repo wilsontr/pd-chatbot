@@ -1,10 +1,14 @@
 """Tests for pd-patch structured validation."""
 
 import json
+import re
+from pathlib import Path
 
 import pytest
-from pd_schema import PdPatch, PdObject, PdConnection
+from pd_schema import PD_OBJECT_TYPES, PdPatch, PdObject, PdConnection
+from agent.prompt import AGENT_SYSTEM_PROMPT, SYSTEM_PROMPT
 from agent.patches import (
+    RETRY_PROMPT,
     extract_pd_patches,
     validate_and_canonicalize_blocks,
     validate_patch,
@@ -54,6 +58,60 @@ class TestPdPatchSchema:
     def test_empty_objects_rejected(self):
         with pytest.raises(Exception):
             PdPatch.model_validate({"objects": [], "connections": []})
+
+
+_TYPES_TS = Path(__file__).resolve().parent.parent / "frontend" / "src" / "types.ts"
+
+# Spelled out rather than read from the schema, so dropping a type fails a test.
+_EXPECTED_TYPES = [
+    "obj", "msg", "floatatom", "comment", "table", "array", "bng", "tgl",
+    "hsl", "vsl", "hradio", "vradio", "nbx", "vu", "cnv",
+]
+
+
+class TestBoxTypes:
+    def test_expected_types(self):
+        assert sorted(PD_OBJECT_TYPES) == sorted(_EXPECTED_TYPES)
+
+    @pytest.mark.parametrize("box_type", _EXPECTED_TYPES)
+    def test_type_survives_block_validation(self, box_type):
+        patch = {
+            "objects": [
+                {"id": "0", "type": box_type, "text": f"{box_type} x", "inlets": 1, "outlets": 1}
+            ],
+            "connections": [],
+        }
+        text, failed = validate_and_canonicalize_blocks(
+            f"```pd-patch\n{json.dumps(patch)}\n```"
+        )
+        assert not failed
+        assert json.loads(extract_pd_patches(text)[0][0]) == patch
+
+    @pytest.mark.parametrize("box_type", _EXPECTED_TYPES)
+    def test_retry_prompt_lists_type(self, box_type):
+        assert box_type in re.search(r'"type": "([^"]+)"', RETRY_PROMPT).group(1).split("|")
+
+    @pytest.mark.parametrize("prompt", [SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT])
+    @pytest.mark.parametrize("box_type", _EXPECTED_TYPES)
+    def test_answer_prompt_lists_type(self, prompt, box_type):
+        types = prompt.split("type is one of:")[1].split("inlets and outlets must")[0]
+        # A definition is followed by "(", or by "and <type> (" for the paired widgets.
+        assert re.search(rf"\b{box_type} (?:and \w+ )?\(", types)
+
+    def test_frontend_types_match(self):
+        source = _TYPES_TS.read_text()
+        # Drop comments: they contain quoted examples.
+        source = re.sub(r"//.*", "", source)
+        union = re.search(r"export type PdObjectType =(.*?)(?=\nexport )", source, re.DOTALL)
+        assert sorted(re.findall(r"'([^']+)'", union.group(1))) == sorted(PD_OBJECT_TYPES)
+
+    @pytest.mark.parametrize("model", [PdObject, PdConnection, PdPatch])
+    def test_frontend_fields_match(self, model):
+        source = re.sub(r"//.*", "", _TYPES_TS.read_text())
+        body = re.search(
+            rf"export interface {model.__name__} \{{(.*?)\}}", source, re.DOTALL
+        ).group(1)
+        assert set(re.findall(r"^\s*(\w+):", body, re.MULTILINE)) == set(model.model_fields)
 
 
 class TestValidatePatch:
