@@ -107,7 +107,18 @@ class RetrievalResult:
 
 
 def _run_hybrid(entry: GoldenEntry) -> RetrievalResult:
-    chunks, _ = retrieve(entry.question, entry.history)
+    # Route with the dataset's curated query_type rather than the live classifier
+    # so this gate measures the retriever, not the router's run-to-run sampling.
+    # Production routing is exercised by the scope eval and the generation eval.
+    classification = {
+        "rewritten_query": entry.question,
+        "query_type": entry.query_type,
+        "object_names": [],
+        "scope": "in_scope",
+        "off_topic_part": "",
+        "pd_query": entry.question,
+    }
+    chunks, _ = retrieve(entry.question, entry.history, classification=classification)
     return RetrievalResult(
         entry.id,
         _parent_ids_from_chunks(chunks),

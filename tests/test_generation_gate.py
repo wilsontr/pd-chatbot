@@ -162,6 +162,11 @@ def evaluate_module(monkeypatch):
     for name in ("evaluation.evaluate", "evaluation.generation", "evaluation.retrieval"):
         monkeypatch.delitem(sys.modules, name, raising=False)
     module = importlib.import_module("evaluation.evaluate")
+    # Scope scoring calls the real classifier; tests that do not exercise it get
+    # a passing result so the gate's generation logic stays isolated.
+    module.run_scope_eval = lambda *a, **k: {
+        "n": 20, "adherence": 1.0, "failures": [], "cases": [],
+    }
     yield module
     for name in ("evaluation.evaluate", "evaluation.generation", "evaluation.retrieval"):
         sys.modules.pop(name, None)

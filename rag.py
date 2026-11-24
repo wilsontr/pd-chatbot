@@ -19,6 +19,7 @@ from pd_schema import PdPatch
 from model_config import ANSWER_MODEL, JUDGE_MODEL, max_tokens_for, thinking_kwargs
 import cost_tracker
 import pricing
+import scope
 from llm_response import text_of
 from evaluation.judge import score_faithfulness
 from evaluation.retry import with_retries
@@ -85,6 +86,18 @@ def _cost_details(model: str, resp: Any) -> dict[str, float] | None:
     return {"total": round(cost, 8)} if cost is not None else None
 
 
+def _record_scope_decision(scope_label: str, *, refused: bool) -> None:
+    """Count refusals in New Relic and score the decision in Langfuse."""
+    if refused:
+        newrelic.agent.record_custom_metric("Custom/Guard/OutOfScope", 1)
+        logger.info("scope refusal (%s)", scope_label)
+    if _langfuse is not None:
+        try:
+            _langfuse.score_current_span(name="scope", value=0 if refused else 1)
+        except Exception:
+            logger.debug("failed to score scope", exc_info=True)
+
+
 def _record_request_cost(root: Any, meta: dict[str, Any], summary: dict[str, Any]) -> None:
     """Attach the request's cost to its trace and to New Relic."""
     meta.update({
@@ -149,6 +162,12 @@ bm25 = BM25Okapi(tokenized_corpus)
 SYSTEM_PROMPT = (
     "You are a helpful assistant that answers questions about Pure Data (Pd), "
     "a visual programming language for music and multimedia. "
+    "Stay in scope: only help with Pure Data, its objects, patching, audio/MIDI technique "
+    "and the official documentation. If a request is unrelated to Pd, say briefly that you "
+    "only cover Pd and suggest a Pd topic instead of answering it. "
+    "Refuse requests for harmful, illegal or disallowed content, including requests framed as "
+    "Pd tasks (for example patches designed to injure people, damage equipment or disrupt "
+    "other systems): decline plainly and do not offer a workaround. "
     "Use the provided documentation excerpts as your primary source, and treat them as "
     "authoritative over anything else. "
     "Never state a specific numeric argument, default value, inlet/outlet count, or object "
@@ -190,6 +209,33 @@ SYSTEM_PROMPT = (
     "- When describing a signal chain in prose (not a patch block), use a markdown table "
     "with columns Object and Role, or a numbered list — never multiple objects separated by | on one line."
 )
+
+
+# Scope rules travel in the classifier's system block so the user-message routing
+# instructions stay close to their original form (see classify_query).
+CLASSIFIER_SYSTEM_PROMPT = (
+    "You classify questions for a Pure Data documentation assistant.\n\n"
+    + scope.SCOPE_CLASSIFICATION_RULES
+)
+
+
+_OBJECT_IN_BRACKETS = re.compile(r"\[([A-Za-z0-9_~.+\-]{1,40})(?:\s[^\]]*)?\]")
+
+
+def object_names_from_question(question: str) -> list[str]:
+    """Object names written as [osc~] in the question itself.
+
+    Deterministic companion to the classifier's object_names: the exact-object
+    lookup is the part of hybrid retrieval that beats vector-only, and relying on
+    an LLM to re-extract names the user already wrote in brackets made recall
+    swing between runs.
+    """
+    names: list[str] = []
+    for match in _OBJECT_IN_BRACKETS.finditer(question):
+        name = match.group(1).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 def _make_cache_key(question: str) -> str:
@@ -255,6 +301,10 @@ def classify_query(question: str, history: list[HistoryItem]) -> dict[str, Any]:
             for m in recent
         ])
 
+    # Scope rules go in the system block so the routing instructions below stay
+    # almost word-for-word what they were before the gate existed: appending scope
+    # rules to the same message measurably degraded retrieval (hybrid recall@5
+    # 0.78 -> 0.75) by changing how the model rewrote queries.
     prompt = f"""You are helping route questions about Pure Data (Pd) to the right documentation source.
 
 {"Conversation history:\n" + history_text if history_text else ""}
@@ -263,8 +313,11 @@ Question: {question}
 
 Respond in JSON with these fields:
 - "rewritten_query": standalone version of the question incorporating any context from history
-- "query_type": one of "object_reference", "conceptual", or "both"
+- "query_type": one of "object_reference", "conceptual", or "both". Use "object_reference" when the question is primarily about one or more named Pd objects (for example "What are the inlets of [osc~]?"); use "conceptual" for patching or technique questions that name no object; use "both" only when the question genuinely needs both kinds of documentation.
 - "object_names": list of Pd object names mentioned (e.g. ["osc~", "pack"]), empty list if none
+- "scope": one of "in_scope", "off_topic", "mixed", "policy_violation"
+- "off_topic_part": the non-Pd part when scope is "mixed", otherwise ""
+- "pd_query": when scope is "mixed", the Pure Data part of the question as a standalone search query; otherwise the same as "rewritten_query"
 
 Return only the JSON object, no other text."""
 
@@ -275,7 +328,11 @@ Return only the JSON object, no other text."""
             response = with_retries(
                 llm.messages.create,
                 model="claude-haiku-4-5",
-                max_tokens=200,
+                # Six fields plus scope reasoning; 200 tokens truncated the JSON
+                # often enough to fall back to the default classification, which
+                # measurably hurt hybrid retrieval (recall@5 0.78 -> 0.72).
+                max_tokens=400,
+                system=[{"type": "text", "text": CLASSIFIER_SYSTEM_PROMPT}],
                 messages=[{"role": "user", "content": prompt}]
             )
         raw = text_of(response).strip()
@@ -289,8 +346,14 @@ Return only the JSON object, no other text."""
             result = {
                 "rewritten_query": question,
                 "query_type": "both",
-                "object_names": []
+                "object_names": [],
+                "scope": scope.IN_SCOPE,
+                "off_topic_part": "",
+                "pd_query": question,
             }
+        result["scope"] = scope.classify_scope(result.get("scope"))
+        result.setdefault("off_topic_part", "")
+        result.setdefault("pd_query", result.get("rewritten_query", question))
         obs.update(output=result, usage_details=_token_usage(response))
         if _token_usage(response):
             obs.update(cost_details=_cost_details("claude-haiku-4-5", response))
@@ -329,6 +392,36 @@ def vector_search(
         include=["metadatas", "distances"]
     )
     return results["ids"][0], results["metadatas"][0]
+
+
+def max_similarity(
+    query: str,
+    *,
+    query_vector: list[float] | None = None,
+    content_type: str | None = None,
+    n_results: int = 5,
+) -> float | None:
+    """Best cosine similarity among the top matches, or None when nothing matches.
+
+    Chroma is configured with ``hnsw:space=cosine``, so it returns ``1 - cosine
+    similarity`` as the distance. This is what makes a relevance cutoff possible:
+    the hybrid retriever ranks by RRF and throws the distances away, so a query
+    with no real match still comes back with its five least-bad chunks.
+    """
+    if query_vector is None:
+        with newrelic.agent.ExternalTrace('voyageai', 'api.voyageai.com', 'POST'):
+            query_vector = vc.embed([query], model="voyage-3-lite").embeddings[0]
+    where = {"content_type": {"$eq": content_type}} if content_type else None
+    results = collection.query(
+        query_embeddings=[query_vector],
+        n_results=n_results,
+        where=where,
+        include=["distances"],
+    )
+    distances = (results.get("distances") or [[]])[0]
+    if not distances:
+        return None
+    return 1.0 - min(distances)
 
 
 def bm25_search(query: str, top_k: int = 10, content_type: str | None = None) -> list[str]:
@@ -420,14 +513,48 @@ def hybrid_retrieve(
 
 
 @newrelic.agent.function_trace()
-def retrieve(question: str, history: list[HistoryItem] | None = None) -> tuple[list[Chunk], dict[str, Any]]:
-    """Full retrieval pipeline: classify, then search appropriately."""
+def retrieve(
+    question: str,
+    history: list[HistoryItem] | None = None,
+    *,
+    classification: dict[str, Any] | None = None,
+) -> tuple[list[Chunk], dict[str, Any]]:
+    """Full retrieval pipeline: classify, then search appropriately.
+
+    ``classification`` lets a caller that already classified the question (the
+    scope gate does) avoid a second model call.
+
+    Returns no chunks — which routes the caller to its "no relevant documentation"
+    message — when the question is out of scope or when the best match is below
+    ``scope.MIN_RELEVANCE_SIMILARITY``.
+    """
     if history is None:
         history = []
-    classification = classify_query(question, history)
-    query = classification["rewritten_query"]
+    if classification is None:
+        classification = classify_query(question, history)
+    if scope.is_refusal(classification.get("scope")):
+        return [], classification
     query_type = classification["query_type"]
-    object_names = classification.get("object_names", [])
+    object_names = list(classification.get("object_names", []))
+    written_objects = object_names_from_question(question)
+    for name in written_objects:
+        if name not in object_names:
+            object_names.append(name)
+
+    # A mixed question's combined query embeds poorly against Pd documentation
+    # (measured 0.41 against a 0.42 cutoff for "[osc~]..., and the capital of
+    # France?"), which would drop the Pd part. The classifier supplies a Pd-only
+    # query for that case, used for both search and the relevance cutoff.
+    mixed = scope.decide(classification.get("scope")) == scope.ANSWER_WITH_DECLINE
+    if mixed:
+        query = classification.get("pd_query") or classification["rewritten_query"]
+    elif history:
+        # The rewrite exists to resolve references in follow-ups; with no history
+        # it only adds classifier noise to the embedding.
+        query = classification["rewritten_query"]
+    else:
+        query = question
+    bm25_query = query if mixed else question
 
     obs_cm = _start_obs_ctx("retrieve", as_type="span",
                             input=question,
@@ -444,14 +571,14 @@ def retrieve(question: str, history: list[HistoryItem] | None = None) -> tuple[l
                 query,
                 content_type="object_reference",
                 object_names=object_names,
-                bm25_query=question,
+                bm25_query=bm25_query,
                 query_vector=query_vector,
             )
         elif query_type == "conceptual":
             chunks = hybrid_retrieve(
                 query,
                 content_type="conceptual",
-                bm25_query=question,
+                bm25_query=bm25_query,
                 query_vector=query_vector,
             )
         else:  # "both"
@@ -460,23 +587,52 @@ def retrieve(question: str, history: list[HistoryItem] | None = None) -> tuple[l
                 top_k=3,
                 content_type="object_reference",
                 object_names=object_names,
-                bm25_query=question,
+                bm25_query=bm25_query,
                 query_vector=query_vector,
             )
             conceptual_results = hybrid_retrieve(
                 query,
                 top_k=3,
                 content_type="conceptual",
-                bm25_query=question,
+                bm25_query=bm25_query,
                 query_vector=query_vector,
             )
-            chunks = obj_results + conceptual_results
+            # Interleave the two sources instead of concatenating them: recall@5
+            # scores the first five chunks, and putting all three object results
+            # first buried the conceptual match a mixed question needed.
+            chunks = []
+            for obj, con in zip(obj_results, conceptual_results):
+                chunks.extend([obj, con])
+            if len(obj_results) > len(conceptual_results):
+                chunks.extend(obj_results[len(conceptual_results):])
+            elif len(conceptual_results) > len(obj_results):
+                chunks.extend(conceptual_results[len(obj_results):])
+
+        # Relevance backstop: hybrid retrieval always returns its top-k, so
+        # without this a question with no real match would still be answered
+        # from five irrelevant chunks.
+        best_similarity = max_similarity(
+            query, query_vector=query_vector, content_type=None
+        ) if chunks else None
+        below_cutoff = (
+            best_similarity is not None
+            and best_similarity < scope.MIN_RELEVANCE_SIMILARITY
+        )
+        if below_cutoff:
+            logger.info(
+                "low relevance (best similarity %.3f < %.3f) q=%r",
+                best_similarity, scope.MIN_RELEVANCE_SIMILARITY, question[:80],
+            )
+            newrelic.agent.record_custom_metric("Custom/Guard/LowRelevance", 1)
+            chunks = []
 
         obs.update(
             output={"chunk_count": len(chunks),
                     "headings": [c.get("heading_path", "")[:120] for c in chunks[:5]]},
             metadata={"query_type": query_type, "object_names": object_names,
-                      "chunk_sources": [c.get("source", "") for c in chunks[:5]]},
+                      "chunk_sources": [c.get("source", "") for c in chunks[:5]],
+                      "best_similarity": round(best_similarity, 3) if best_similarity is not None else None,
+                      "below_relevance_cutoff": below_cutoff},
         )
     return chunks, classification
 
@@ -486,6 +642,7 @@ def _build_chat_messages(
     context_chunks: list[Chunk],
     history: list[HistoryItem],
     system_prompt: str | None = None,
+    scope_note: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Assemble the system block and messages list for a Claude generation call.
 
@@ -515,10 +672,10 @@ def _build_chat_messages(
         "cache_control": {"type": "ephemeral"},
     }]
 
-    messages = list(history) + [{
-        "role": "user",
-        "content": f"Documentation excerpts:\n\n{context_str}\n\n---\n\nQuestion: {question}"
-    }]
+    user_content = f"Documentation excerpts:\n\n{context_str}\n\n---\n\nQuestion: {question}"
+    if scope_note:
+        user_content += f"\n\n{scope_note}"
+    messages = list(history) + [{"role": "user", "content": user_content}]
 
     return system_block, messages
 
@@ -536,11 +693,18 @@ def _chunks_to_sources(chunks: list[Chunk]) -> list[dict]:
     ]
 
 
-def generate_response(question: str, context_chunks: list[Chunk], history: list[HistoryItem] | None = None) -> str:
+def generate_response(
+    question: str,
+    context_chunks: list[Chunk],
+    history: list[HistoryItem] | None = None,
+    scope_note: str | None = None,
+) -> str:
     """Generate a response using Claude with retrieved context."""
     if history is None:
         history = []
-    system_block, messages = _build_chat_messages(question, context_chunks, history)
+    system_block, messages = _build_chat_messages(
+        question, context_chunks, history, scope_note=scope_note
+    )
     obs_cm = _start_obs_ctx("generate_response", as_type="generation",
                             model=ANSWER_MODEL,
                             input=question,
@@ -567,13 +731,16 @@ async def _async_generate_response_stream(
     context_chunks: list[Chunk],
     history: list[HistoryItem],
     _usage_capture: list[Any] | None = None,
+    scope_note: str | None = None,
 ):
     """Async generator that yields text chunks from the Claude streaming API.
 
     If _usage_capture is a list, the final message's usage object is appended
     to it after the stream completes, so callers can read token counts.
     """
-    system_block, messages = _build_chat_messages(question, context_chunks, history)
+    system_block, messages = _build_chat_messages(
+        question, context_chunks, history, scope_note=scope_note
+    )
     with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
         async with async_llm.messages.stream(
             model=ANSWER_MODEL,
@@ -635,7 +802,28 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
 
         newrelic.agent.record_custom_metric('Custom/Cache/Miss', 1)
         logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
-        context_chunks, classification = await asyncio.to_thread(retrieve, question, history)
+        classification = await asyncio.to_thread(classify_query, question, history)
+        scope_action = scope.decide(classification.get("scope"))
+        if scope_action in (scope.REFUSE_OFF_TOPIC, scope.REFUSE_POLICY):
+            answer = scope.refusal_text(classification.get("scope"))
+            _record_scope_decision(classification.get("scope"), refused=True)
+            with _cache_lock:
+                _response_cache[key] = (question, answer, [], classification, False)
+            root_meta.update({
+                "cache": "miss",
+                "scope": classification.get("scope"),
+                "refused": True,
+            })
+            root.update(output=answer, metadata=root_meta)
+            yield {"type": "meta", "sources": [],
+                   "query_type": classification.get("query_type", "both")}
+            yield {"type": "chunk", "text": answer}
+            yield {"type": "done", "history": history}
+            return
+        _record_scope_decision(classification.get("scope"), refused=False)
+        context_chunks, classification = await asyncio.to_thread(
+            retrieve, question, history, classification=classification
+        )
 
         if not context_chunks:
             answer = (
@@ -659,7 +847,15 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
                          metadata={"chunk_count": len(context_chunks)})
         full_text = ""
         usage_capture: list[Any] = []
-        async for text in _async_generate_response_stream(question, context_chunks, history, _usage_capture=usage_capture):
+        scope_note = (
+            scope.mixed_scope_note(classification)
+            if scope.decide(classification.get("scope")) == scope.ANSWER_WITH_DECLINE
+            else None
+        )
+        async for text in _async_generate_response_stream(
+            question, context_chunks, history,
+            _usage_capture=usage_capture, scope_note=scope_note,
+        ):
             full_text += text
             yield {"type": "chunk", "text": text}
         if usage_capture:
@@ -902,7 +1098,24 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
                 return answer, chunks, classification, new_history
 
             logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
-            context_chunks, classification = retrieve(question, history)
+            classification = classify_query(question, history)
+            scope_action = scope.decide(classification.get("scope"))
+            if scope_action in (scope.REFUSE_OFF_TOPIC, scope.REFUSE_POLICY):
+                answer = scope.refusal_text(classification.get("scope"))
+                _record_scope_decision(classification.get("scope"), refused=True)
+                with _cache_lock:
+                    _response_cache[key] = (question, answer, [], classification, False)
+                root_meta.update({
+                    "cache": "miss",
+                    "scope": classification.get("scope"),
+                    "refused": True,
+                })
+                root.update(output=answer, metadata=root_meta)
+                return answer, [], classification, history
+            _record_scope_decision(classification.get("scope"), refused=False)
+            context_chunks, classification = retrieve(
+                question, history, classification=classification
+            )
             if not context_chunks:
                 answer = (
                     "I couldn't find any relevant Pure Data documentation for that question. "
@@ -914,7 +1127,14 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
                 root.update(output=answer, metadata=root_meta)
                 return answer, [], classification, history
 
-            answer = generate_response(question, context_chunks, history)
+            answer = generate_response(
+                question, context_chunks, history,
+                scope_note=(
+                    scope.mixed_scope_note(classification)
+                    if scope.decide(classification.get("scope")) == scope.ANSWER_WITH_DECLINE
+                    else None
+                ),
+            )
             answer, patch_failed = _validate_and_canonicalize_blocks(answer)
             if patch_failed:
                 logger.info("pd-patch validation failed — retrying")

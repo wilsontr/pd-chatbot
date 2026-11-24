@@ -29,8 +29,11 @@ from model_config import ANSWER_MODEL, JUDGE_MODEL
 from .dataset import GoldenDataset
 from .retrieval import run_retrieval_eval
 from .generation import run_generation_eval
+from .scope_eval import run_scope_eval
 from .gates import (
     GENERATION_THRESHOLDS,
+    SCOPE_ADHERENCE_THRESHOLD,
+    check_scope_threshold,
     check_generation_thresholds,
     generation_summary_markdown,
     mean_score,
@@ -218,6 +221,14 @@ def main(argv: list[str] | None = None) -> dict:
                 verbose=not args.quiet,
             )
 
+    if "generation" in results:
+        # Scope is scored with the same classifier the app uses, one call per
+        # case and no generation, so it is cheap enough to run beside every
+        # sampled generation eval.
+        if not args.quiet:
+            print("\n=== Scope Evaluation ===\n", file=sys.stderr)
+        results["scope"] = run_scope_eval()
+
     if args.output:
         with open(args.output, "w") as f:
             json.dump(results, f, indent=2)
@@ -259,6 +270,7 @@ def main(argv: list[str] | None = None) -> dict:
             print("error: --gate requires --generation or --all", file=sys.stderr)
             return 2
         failures = check_generation_thresholds(results["generation"])
+        failures += check_scope_threshold(results.get("scope"))
         if failures:
             print("\nGeneration gate FAILED:", file=sys.stderr)
             for failure in failures:
@@ -268,7 +280,8 @@ def main(argv: list[str] | None = None) -> dict:
                 + ", ".join(
                     f"{dim} >= {minimum:g}"
                     for dim, minimum in GENERATION_THRESHOLDS.items()
-                ),
+                )
+                + f", scope adherence >= {SCOPE_ADHERENCE_THRESHOLD:g}",
                 file=sys.stderr,
             )
             exit_code = 1
@@ -397,6 +410,21 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             )
         lines.append("")
 
+    scope_result = results.get("scope") or {}
+    if scope_result.get("n"):
+        lines.append("## Scope gate")
+        lines.append("")
+        lines.append(
+            f"- **Adherence:** {scope_result['adherence']:.0%} of "
+            f"{scope_result['n']} scope cases ({len(scope_result.get('failures') or [])} miss)"
+        )
+        for failure in (scope_result.get("failures") or [])[:5]:
+            lines.append(
+                f"- miss: `{failure['id']}` expected {failure['expected']}, "
+                f"got {failure['predicted']}"
+            )
+        lines.append("")
+
     lines.append("---")
     if retrieval:
         lines.append(f"*Thresholds enforced in CI: recall@5 >= 60%, MRR >= 0.30, "
@@ -408,7 +436,8 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             f"{dim} >= {minimum:g}" for dim, minimum in GENERATION_THRESHOLDS.items()
         )
         lines.append(
-            f"*Generation gate (mean on the 1-5 judge scale): {gate}. "
+            f"*Generation gate (mean on the 1-5 judge scale): {gate}, "
+            f"scope adherence >= {SCOPE_ADHERENCE_THRESHOLD:g}. "
             "Citation correctness is gated: the prompt requires URLs copied "
             "verbatim from the excerpts, so invented URLs fail the build.*"
         )

@@ -72,9 +72,14 @@ quality and guard against regressions.
 
 | Strategy | recall@5 | MRR |
 |----------|----------|-----|
-| Hybrid RRF | 80% | 0.76 |
+| Hybrid RRF | 75% | 0.70 |
 | Vector-only | 73% | 0.61 |
 | BM25-only | 37% | 0.26 |
+
+Retrieval metrics route each question with the dataset's curated `query_type`
+rather than the live classifier, so the gate measures the retriever instead of
+the router's run-to-run sampling; production routing is covered by the scope
+eval below.
 
 Current numbers are published in **[EVAL.md](docs/EVAL.md)**, updated on every push to
 `main` by a GitHub Actions workflow.
@@ -109,7 +114,7 @@ fails the build when a mean drops below threshold.
 | Judge model | `claude-haiku-4-5` (1–5 rubric) |
 | Sample | 10 of 30 golden entries, deterministic prefix |
 | Gate | faithfulness ≥ 4.0, relevance ≥ 4.5, citation ≥ 4.0 (collapse guard) |
-| Cost bound | **~$0.12 per PR run** (10 generations + 30 judge calls at measured rates) |
+| Cost bound | **~$0.13 per PR run** (10 generations + 30 judge calls + 20 scope classifications at measured rates) |
 
 Citation correctness is gated as a collapse guard: the system prompt requires
 URLs to be copied verbatim from the retrieved excerpts, which lifted the
@@ -180,6 +185,47 @@ retried once with a correction prompt. The streaming path replaces malformed
 blocks with a `[patch diagram]` placeholder. Parse failures are tracked via
 New Relic (`Custom/PdPatch/ParseFailure`) and Langfuse (`pd_patch_valid`
 score).
+
+### Scope gate
+
+Questions outside Pure Data are refused before generation, and in-domain harmful
+requests are declined, using the classification call the pipeline already makes
+once per query (see [`scope.py`](scope.py)):
+
+- **Off-topic** — "What is the capital of France?" gets a short refusal naming Pd
+  and suggesting Pd topics. No retrieval, no generation call.
+- **Mixed** — "What does [osc~] do, and what is the capital of France?" answers the
+  Pd part and declines the rest in the same reply: the classifier extracts a
+  Pd-only query for retrieval and adds a scope note to the generation prompt.
+- **Policy violation** — including Pd-framed harmful requests such as "a patch
+  that overloads a sound system to damage hearing" — gets a policy refusal and no
+  generation. The system prompt also carries an explicit policy instruction, so a
+  case the classifier misses is still declined by the model.
+- **Low relevance** — hybrid retrieval always returns its top-k, so a cutoff on
+  the best cosine similarity (0.42) sends queries with no real match down the
+  existing "couldn't find relevant documentation" path. Measured against the
+  golden set: the lowest legitimate question scores 0.449 (p10 0.504) while 12
+  unrelated probes top out at 0.433 (median 0.297), so the cutoff sits 0.03 below
+  the lowest legitimate query.
+
+Scope is judged from the question itself, with history used only to resolve
+references, so on-topic history cannot launder an off-topic question; two
+multi-turn cases in the eval set cover that. Refusals are counted in New Relic
+(`Custom/Guard/OutOfScope`, `Custom/Guard/LowRelevance`) and scored in Langfuse,
+so the block rate is visible.
+
+The cases live in
+[`evaluation/scope_dataset.json`](evaluation/scope_dataset.json) — 20 of them
+(6 off-topic, 3 mixed, 6 policy, 2 multi-turn bypass, 3 on-topic) — and are scored
+by `evaluation/scope_eval.py` with one classifier call each and no generation.
+The CI gate fails below 90% adherence; it currently scores 100%.
+
+**Limits**: this is a guardrail, not a security boundary. The classifier can be
+wrong in both directions — unknown labels fail open to in-scope, because refusing
+a legitimate Pd question is worse than answering a borderline one — and a
+determined user can still disguise an off-topic request as Pd work. There is no
+output moderation: harmful in-domain output the model does produce is caught only
+by the faithfulness guard and Claude's own training.
 
 ### Feedback loop
 
