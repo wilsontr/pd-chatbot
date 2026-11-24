@@ -82,6 +82,11 @@ correctness scored by a Claude-as-judge rubric (LLM-as-judge). A sampled run
 runs in CI on every push to `main`, so [EVAL.md](docs/EVAL.md) publishes
 current generation numbers next to the retrieval tables.
 
+**Model choice**: five models measured on all 30 entries over 2 trials — gated
+quality is tied within noise, citation correctness is not. See
+**[MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md)** for the measured cost per
+query and the recommendation.
+
 **CI gating — retrieval**: `pytest tests/` asserts thresholds (recall@5 ≥ 60%,
 MRR ≥ 0.30, hybrid ≥ both baselines). Runs on every PR and push.
 
