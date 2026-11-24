@@ -257,8 +257,13 @@ def score_faithfulness(
     answer: str,
     context_chunks: list[dict[str, Any]],
     judge_model: str = "claude-haiku-4-5",
+    usage_sink: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
-    """Score only faithfulness (single Haiku call) — cheap enough to run inline at request time."""
+    """Score only faithfulness (single Haiku call) — cheap enough to run inline at request time.
+
+    ``usage_sink`` collects the judge call's token usage so production can bill
+    the guardrail to the request it was serving.
+    """
     context_str = "\n\n---\n\n".join(
         f"[{c.get('heading_path', '')}]\n{c.get('text', '')}"
         for c in context_chunks
@@ -266,6 +271,7 @@ def score_faithfulness(
     return _score_single(
         client, judge_model, FAITHFULNESS_PROMPT,
         context=context_str, question=question, answer=answer,
+        usage_sink=usage_sink,
     )
 
 

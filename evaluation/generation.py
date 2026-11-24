@@ -43,49 +43,11 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 _deepseek_client: openai.OpenAI | None = None
 
-# $ per million tokens, synced 2026-11-23 from the published price sheets:
-#   Anthropic: https://platform.claude.com/docs/en/about-claude/pricing
-#              (mirrored per-model at https://benchlm.ai/anthropic/api-pricing)
-#   DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing/
-#              (mirrored per-model at https://benchlm.ai/deepseek/api-pricing)
-#
-# Two conventions, both deliberate:
-#   * DeepSeek bills on a peak schedule (01:00-04:00 and 06:00-10:00 UTC Mon-Fri)
-#     and at half price off-peak. The table records PEAK rates, so a reported cost
-#     is an upper bound — off-peak runs are cheaper than reported, never dearer.
-#   * An id that is missing here reports no cost (None) rather than a stale one.
-#     Retired ids are removed on purpose: `deepseek-v4-flash` was retired on
-#     2026-09-10 and its replacement is served as `deepseek-flash`. Re-add an id
-#     only with a rate you have just read off the sheet.
-PRICING_PER_MTOK: dict[str, dict[str, float]] = {
-    # Anthropic (flat pricing, no peak/off-peak)
-    "claude-sonnet-4-6": {"input": 3.00, "cache_read": 0.30, "output": 15.00},
-    "claude-sonnet-5-5": {"input": 2.00, "cache_read": 0.10, "output": 10.00},
-    "claude-haiku-4-5": {"input": 1.00, "cache_read": 0.10, "output": 5.00},
-    "claude-haiku-5-5": {"input": 0.10, "cache_read": 0.01, "output": 0.50},
-    # DeepSeek (peak rates; half price off-peak)
-    "deepseek-flash": {"input": 0.30, "cache_read": 0.006, "output": 1.20},
-    "deepseek-v4-pro": {"input": 1.32, "cache_read": 0.044, "output": 3.96},
-}
+from pricing import PRICING_PER_MTOK, cache_savings_usd, cost_usd as _cost_usd
 
 
 def _is_deepseek_model(model: str) -> bool:
     return model.lower().startswith("deepseek")
-
-
-def _cost_usd(model: str, usage: dict[str, int]) -> float | None:
-    """Compute exact request cost from measured token usage. Returns None if the
-    model isn't in PRICING_PER_MTOK (comparison-only models, e.g. a judge model
-    run standalone, or a new model id not yet added to the table)."""
-    rates = PRICING_PER_MTOK.get(model)
-    if rates is None:
-        return None
-    uncached_input = usage.get("input_tokens", 0) - usage.get("cache_read_tokens", 0)
-    return (
-        uncached_input * rates["input"]
-        + usage.get("cache_read_tokens", 0) * rates["cache_read"]
-        + usage.get("output_tokens", 0) * rates["output"]
-    ) / 1_000_000
 
 
 def _get_deepseek_client() -> openai.OpenAI:

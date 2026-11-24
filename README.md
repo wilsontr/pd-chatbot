@@ -192,6 +192,36 @@ therefore keep their full context even after the in-memory response cache
 expires. The data grows an eval set from real usage — see
 [From feedback to eval](#from-feedback-to-eval).
 
+### Cost per request
+
+Every request prices its model calls: classification, generation and the inline
+faithfulness guard each attach a USD cost to their Langfuse observation, and the
+request trace carries the total plus a per-kind breakdown.
+[`pricing.py`](pricing.py) is the single rate table shared with the evaluation
+harness, so the cost the eval reports per query and the cost production reports
+per request are directly comparable.
+
+Measured on 2026-11-24 (five live requests through the streaming path, current
+models and rates):
+
+| | per request | per 1 000 requests |
+|---|---|---|
+| **Total** | **$0.0048** | **$4.80** |
+| — faithfulness guard | $0.0035 (≈74%) | $3.5 |
+| — generation | $0.0008 (≈16%) | $0.8 |
+| — classification | $0.0005 (≈10%) | $0.5 |
+| Prompt-cache savings | $0.000095 (≈2%) | $0.095 |
+
+The guard dominates the bill: it re-reads the retrieved excerpts to judge
+faithfulness, so its input is several times the answer's. That is the first place
+to look for cost reductions (for example judging only low-confidence answers, or
+sending the judge fewer chunks). Cache savings are small by construction — only
+the ~800-token system prompt carries `cache_control`; the documentation excerpts
+differ per query and cannot be cached.
+
+New Relic receives `Custom/Cost/RequestUsd` and `Custom/Cost/CacheSavingsUsd`
+per request; Langfuse shows the same figures on the trace and on each model call.
+
 ### API auth
 
 The backend accepts multiple API keys (`CHAT_API_KEYS`, comma-separated in

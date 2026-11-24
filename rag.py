@@ -16,7 +16,9 @@ from rank_bm25 import BM25Okapi
 import anthropic
 from langfuse import get_client as _get_langfuse
 from pd_schema import PdPatch
-from model_config import ANSWER_MODEL, max_tokens_for, thinking_kwargs
+from model_config import ANSWER_MODEL, JUDGE_MODEL, max_tokens_for, thinking_kwargs
+import cost_tracker
+import pricing
 from llm_response import text_of
 from evaluation.judge import score_faithfulness
 from evaluation.retry import with_retries
@@ -60,6 +62,51 @@ def _start_obs_ctx(name: str, as_type: str = "span", **kwargs: Any) -> Any:
     if _langfuse is None:
         return _NoopObs()
     return _langfuse.start_as_current_observation(as_type=as_type, name=name, **kwargs)
+
+
+class _SimpleUsage:
+    """Minimal ``.usage`` stand-in so _cost_details can price a token dict."""
+
+    def __init__(self, tokens: dict[str, int]):
+        self.usage = type("Usage", (), {
+            "input_tokens": tokens.get("input_tokens", 0),
+            "output_tokens": tokens.get("output_tokens", 0),
+            "cache_read_input_tokens": tokens.get("cache_read_tokens", 0),
+            "cache_creation_input_tokens": tokens.get("cache_write_tokens", 0),
+        })()
+
+
+def _cost_details(model: str, resp: Any) -> dict[str, float] | None:
+    """Langfuse per-observation cost, from the same pricing table the eval uses."""
+    usage = _token_usage(resp)
+    if not usage:
+        return None
+    cost = pricing.cost_usd(model, usage)
+    return {"total": round(cost, 8)} if cost is not None else None
+
+
+def _record_request_cost(root: Any, meta: dict[str, Any], summary: dict[str, Any]) -> None:
+    """Attach the request's cost to its trace and to New Relic."""
+    meta.update({
+        "cost_usd": summary["total_usd"],
+        "cache_savings_usd": summary["cache_savings_usd"],
+        "llm_calls": summary["calls"],
+        "cost_by_kind": summary["by_kind"],
+    })
+    if summary["unpriced_models"]:
+        meta["unpriced_models"] = summary["unpriced_models"]
+    try:
+        root.update(metadata=meta, cost_details={"total": summary["total_usd"]})
+    except Exception:
+        logger.debug("failed to attach cost to trace", exc_info=True)
+    newrelic.agent.record_custom_metric("Custom/Cost/RequestUsd", summary["total_usd"])
+    newrelic.agent.record_custom_metric(
+        "Custom/Cost/CacheSavingsUsd", summary["cache_savings_usd"]
+    )
+    logger.info(
+        "request cost $%.6f (cache savings $%.6f) across %d model call(s)",
+        summary["total_usd"], summary["cache_savings_usd"], summary["calls"],
+    )
 
 
 def _token_usage(resp: Any) -> dict[str, int] | None:
@@ -181,6 +228,9 @@ def _compress_history(history: list[HistoryItem]) -> list[HistoryItem]:
                 }]
             )
         gen.update(output=text_of(resp), usage_details=_token_usage(resp))
+        if _token_usage(resp):
+            gen.update(cost_details=_cost_details("claude-haiku-4-5", resp))
+        cost_tracker.record("history_compression", "claude-haiku-4-5", _token_usage(resp))
     summary = text_of(resp).strip()
     logger.info("compressed %d history items into summary", len(old))
 
@@ -242,6 +292,9 @@ Return only the JSON object, no other text."""
                 "object_names": []
             }
         obs.update(output=result, usage_details=_token_usage(response))
+        if _token_usage(response):
+            obs.update(cost_details=_cost_details("claude-haiku-4-5", response))
+        cost_tracker.record("classify", "claude-haiku-4-5", _token_usage(response))
     return result
 
 
@@ -502,6 +555,9 @@ def generate_response(question: str, context_chunks: list[Chunk], history: list[
             **thinking_kwargs(ANSWER_MODEL),
         )
         obs.update(output=text_of(response), usage_details=_token_usage(response))
+        if _token_usage(response):
+            obs.update(cost_details=_cost_details(ANSWER_MODEL, response))
+        cost_tracker.record("generate", ANSWER_MODEL, _token_usage(response))
     return text_of(response)
 
 
@@ -529,6 +585,7 @@ async def _async_generate_response_stream(
             async for text in stream.text_stream:
                 yield text
             final = await stream.get_final_message()
+            cost_tracker.record("generate", ANSWER_MODEL, _token_usage(final))
             if _usage_capture is not None:
                 _usage_capture.append(final)
 
@@ -547,8 +604,9 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
         yield {"type": "done", "history": history}
         return
 
-    root = _start_obs("chat", as_type="span", input=question,
-                      metadata={"history_turns": len(history) // 2})
+    root_meta: dict[str, Any] = {"history_turns": len(history) // 2}
+    root = _start_obs("chat", as_type="span", input=question, metadata=root_meta)
+    cost_token = cost_tracker.start()
 
     try:
         history = await asyncio.to_thread(_compress_history, history)
@@ -568,7 +626,8 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
                 ]
                 if extend else history
             )
-            root.update(output=answer[:500], metadata={"cache": "hit"})
+            root_meta["cache"] = "hit"
+            root.update(output=answer[:500], metadata=root_meta)
             yield {"type": "meta", "sources": _chunks_to_sources(chunks), "query_type": classification["query_type"]}
             yield {"type": "chunk", "text": answer}
             yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
@@ -585,7 +644,8 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
             )
             with _cache_lock:
                 _response_cache[key] = (question, answer, [], classification, False)
-            root.update(output=answer, metadata={"retrieved_chunks": 0, "cache": "miss"})
+            root_meta.update({"retrieved_chunks": 0, "cache": "miss"})
+            root.update(output=answer, metadata=root_meta)
             yield {"type": "meta", "sources": [], "query_type": classification["query_type"]}
             yield {"type": "chunk", "text": answer}
             yield {"type": "done", "history": history}
@@ -638,12 +698,16 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
         ]
         with _cache_lock:
             _response_cache[key] = (question, full_text, context_chunks, classification, True)
-        root.update(output=full_text[:500], metadata={"retrieved_chunks": len(context_chunks),
-                                                      "query_type": classification["query_type"],
-                                                      "cache": "miss"})
+        root_meta.update({"retrieved_chunks": len(context_chunks),
+                          "query_type": classification["query_type"],
+                          "cache": "miss"})
+        root.update(output=full_text[:500], metadata=root_meta)
         yield {"type": "done", "history": new_history[-HISTORY_MAX_OUTGOING:]}
 
     finally:
+        cost_summary = cost_tracker.finish(cost_token)
+        if cost_summary is not None:
+            _record_request_cost(root, root_meta, cost_summary)
         root.end()
 
 
@@ -694,11 +758,28 @@ def _check_faithfulness(question: str, answer: str, chunks: list[Chunk]) -> dict
     """
     if not chunks:
         return None
+    usage: dict[str, dict[str, int]] = {}
+    obs = _start_obs("faithfulness_guard", as_type="generation", model=JUDGE_MODEL)
     try:
-        return score_faithfulness(llm, question=question, answer=answer, context_chunks=chunks)
+        result = score_faithfulness(
+            llm, question=question, answer=answer, context_chunks=chunks,
+            usage_sink=usage,
+        )
+        for model, tokens in usage.items():
+            cost_tracker.record("faithfulness_guard", model, tokens)
+            obs.update(
+                usage_details={
+                    "input": tokens.get("input_tokens", 0),
+                    "output": tokens.get("output_tokens", 0),
+                    "cache_read": tokens.get("cache_read_tokens", 0),
+                },
+                cost_details=_cost_details(model, _SimpleUsage(tokens)),
+            )
+        return result
     except Exception:
         logger.warning("faithfulness judge call failed", exc_info=True)
-        return None
+    finally:
+        obs.end()
 
 
 """ ---------------------------------------------------------------------- """
@@ -794,87 +875,98 @@ def chat(question: str, history: list[HistoryItem] | None = None) -> tuple[str, 
             [], {"query_type": "conceptual"}, [],
         )
 
-    with _start_obs_ctx("chat", as_type="span", input=question,
-                        metadata={"history_turns": len(history) // 2}) as root:
-        history = _compress_history(history)
+    root_meta: dict[str, Any] = {"history_turns": len(history) // 2}
+    cost_token = cost_tracker.start()
+    root = None
+    try:
+        with _start_obs_ctx("chat", as_type="span", input=question,
+                            metadata=root_meta) as root:
+            history = _compress_history(history)
 
-        key = _make_cache_key(question)
-        with _cache_lock:
-            hit = _response_cache.get(key)
-
-        if hit is not None:
-            logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
-            _, answer, chunks, classification, extend = hit
-            new_history = (
-                history + [
-                    {"role": "user", "content": question},
-                    {"role": "assistant", "content": _strip_patch_blocks(answer)},
-                ]
-                if extend else history
-            )
-            root.update(output=answer[:500], metadata={"cache": "hit"})
-            return answer, chunks, classification, new_history
-
-        logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
-        context_chunks, classification = retrieve(question, history)
-        if not context_chunks:
-            answer = (
-                "I couldn't find any relevant Pure Data documentation for that question. "
-                "Try asking about a specific Pd object, patching concept, or audio technique."
-            )
+            key = _make_cache_key(question)
             with _cache_lock:
-                _response_cache[key] = (question, answer, [], classification, False)
-            root.update(output=answer, metadata={"retrieved_chunks": 0, "cache": "miss"})
-            return answer, [], classification, history
+                hit = _response_cache.get(key)
 
-        answer = generate_response(question, context_chunks, history)
-        answer, patch_failed = _validate_and_canonicalize_blocks(answer)
-        if patch_failed:
-            logger.info("pd-patch validation failed — retrying")
-            newrelic.agent.record_custom_metric("Custom/PdPatch/Retry", 1)
-            retry_answer = generate_response(_RETRY_PROMPT, context_chunks, history + [
-                {"role": "assistant", "content": answer},
-            ])
-            retry_answer, retry_failed = _validate_and_canonicalize_blocks(retry_answer)
-            if retry_failed:
-                logger.warning("pd-patch retry also failed")
-            else:
-                patch_failed = False
-            answer = retry_answer
-        if patch_failed and _langfuse is not None:
-            try:
-                root.update(metadata={"pd_patch_valid": False})
-            except Exception:
-                pass
+            if hit is not None:
+                logger.info("cache HIT  [size=%d] q=%r", len(_response_cache), question[:80])
+                _, answer, chunks, classification, extend = hit
+                new_history = (
+                    history + [
+                        {"role": "user", "content": question},
+                        {"role": "assistant", "content": _strip_patch_blocks(answer)},
+                    ]
+                    if extend else history
+                )
+                root_meta["cache"] = "hit"
+                root.update(output=answer[:500], metadata=root_meta)
+                return answer, chunks, classification, new_history
 
-        faithfulness = _check_faithfulness(question, answer, context_chunks)
-        if faithfulness is not None and (faithfulness.get("score") or 0) <= FAITHFULNESS_RETRY_THRESHOLD:
-            logger.info("low faithfulness (score=%s): %s — retrying",
-                        faithfulness.get("score"), faithfulness.get("explanation"))
-            newrelic.agent.record_custom_metric("Custom/Guard/FaithfulnessRetry", 1)
-            retry_prompt = _FAITHFULNESS_RETRY_PROMPT.format(
-                explanation=faithfulness.get("explanation", "unsupported claims"))
-            retry_answer = generate_response(retry_prompt, context_chunks, history + [
-                {"role": "assistant", "content": answer},
-            ])
-            retry_answer, retry_patch_failed = _validate_and_canonicalize_blocks(retry_answer)
-            retry_faithfulness = _check_faithfulness(question, retry_answer, context_chunks)
-            if retry_faithfulness is not None and (retry_faithfulness.get("score") or 0) <= FAITHFULNESS_RETRY_THRESHOLD:
-                logger.warning("faithfulness retry still low (score=%s)", retry_faithfulness.get("score"))
-                newrelic.agent.record_custom_metric("Custom/Guard/LowFaithfulness", 1)
-            answer = retry_answer
-            patch_failed = retry_patch_failed
+            logger.info("cache MISS [size=%d] q=%r", len(_response_cache), question[:80])
+            context_chunks, classification = retrieve(question, history)
+            if not context_chunks:
+                answer = (
+                    "I couldn't find any relevant Pure Data documentation for that question. "
+                    "Try asking about a specific Pd object, patching concept, or audio technique."
+                )
+                with _cache_lock:
+                    _response_cache[key] = (question, answer, [], classification, False)
+                root_meta.update({"retrieved_chunks": 0, "cache": "miss"})
+                root.update(output=answer, metadata=root_meta)
+                return answer, [], classification, history
 
-        new_history = history + [
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": _strip_patch_blocks(answer)},
-        ]
-        with _cache_lock:
-            _response_cache[key] = (question, answer, context_chunks, classification, True)
-        root.update(output=answer[:500], metadata={"retrieved_chunks": len(context_chunks),
-                                                    "query_type": classification["query_type"],
-                                                    "cache": "miss"})
-        return answer, context_chunks, classification, new_history
+            answer = generate_response(question, context_chunks, history)
+            answer, patch_failed = _validate_and_canonicalize_blocks(answer)
+            if patch_failed:
+                logger.info("pd-patch validation failed — retrying")
+                newrelic.agent.record_custom_metric("Custom/PdPatch/Retry", 1)
+                retry_answer = generate_response(_RETRY_PROMPT, context_chunks, history + [
+                    {"role": "assistant", "content": answer},
+                ])
+                retry_answer, retry_failed = _validate_and_canonicalize_blocks(retry_answer)
+                if retry_failed:
+                    logger.warning("pd-patch retry also failed")
+                else:
+                    patch_failed = False
+                answer = retry_answer
+            if patch_failed and _langfuse is not None:
+                try:
+                    root.update(metadata={"pd_patch_valid": False})
+                except Exception:
+                    pass
+
+            faithfulness = _check_faithfulness(question, answer, context_chunks)
+            if faithfulness is not None and (faithfulness.get("score") or 0) <= FAITHFULNESS_RETRY_THRESHOLD:
+                logger.info("low faithfulness (score=%s): %s — retrying",
+                            faithfulness.get("score"), faithfulness.get("explanation"))
+                newrelic.agent.record_custom_metric("Custom/Guard/FaithfulnessRetry", 1)
+                retry_prompt = _FAITHFULNESS_RETRY_PROMPT.format(
+                    explanation=faithfulness.get("explanation", "unsupported claims"))
+                retry_answer = generate_response(retry_prompt, context_chunks, history + [
+                    {"role": "assistant", "content": answer},
+                ])
+                retry_answer, retry_patch_failed = _validate_and_canonicalize_blocks(retry_answer)
+                retry_faithfulness = _check_faithfulness(question, retry_answer, context_chunks)
+                if retry_faithfulness is not None and (retry_faithfulness.get("score") or 0) <= FAITHFULNESS_RETRY_THRESHOLD:
+                    logger.warning("faithfulness retry still low (score=%s)", retry_faithfulness.get("score"))
+                    newrelic.agent.record_custom_metric("Custom/Guard/LowFaithfulness", 1)
+                answer = retry_answer
+                patch_failed = retry_patch_failed
+
+            new_history = history + [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": _strip_patch_blocks(answer)},
+            ]
+            with _cache_lock:
+                _response_cache[key] = (question, answer, context_chunks, classification, True)
+            root_meta.update({"retrieved_chunks": len(context_chunks),
+                              "query_type": classification["query_type"],
+                              "cache": "miss"})
+            root.update(output=answer[:500], metadata=root_meta)
+            return answer, context_chunks, classification, new_history
+    finally:
+        cost_summary = cost_tracker.finish(cost_token)
+        if cost_summary is not None and root is not None:
+            _record_request_cost(root, root_meta, cost_summary)
 
 
 def main():
