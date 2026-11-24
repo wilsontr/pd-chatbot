@@ -94,7 +94,7 @@ same measurement was ~4.7 s to first token). Responses may include:
 - Markdown tables for structured object comparisons
 - **Pd patch diagrams** — when a concrete signal chain is described, the model emits a `pd-patch` JSON block that the frontend renders as an SVG diagram matching the Pd editor's visual style. Patch JSON is validated server-side with Pydantic and retried on failure (see [Quality](#quality)).
 
-The SVG renderer supports all standard Pd box types: `obj` (rectangle), `msg` (notched right edge), `floatatom` (corner-cut number box), `comment` (text label), `table`/`array` (named data stores), and UI widgets (`bng`, `tgl`, `hsl`, `vsl`, etc.). Inlet and outlet nubs and patch cords are drawn automatically; layout is computed with [dagre](https://github.com/dagrejs/dagre).
+The SVG renderer supports all standard Pd box types: `obj` (rectangle), `msg` (notched right edge), `floatatom` (corner-cut number box), `comment` (text label), `table`/`array` (named data stores), and UI widgets (`bng`, `tgl`, `hsl`, `vsl`, etc.). Inlet and outlet nubs and patch cords are drawn automatically; layout is computed with [dagre](https://github.com/dagrejs/dagre). Each diagram can be downloaded as a `.pd` file (`POST /patch/pd`, serialized by [`pd_file.py`](pd_file.py)). Its tests load patches in headless Pd, and are skipped locally when Pd is not installed; set `PD_BIN` to point at a binary that is not on the path.
 
 ### Caching
 
@@ -413,7 +413,7 @@ requires an HMAC-SHA256 signature over the payload, preventing replay attacks
 - [Voyage AI](https://www.voyageai.com/) — embeddings (`voyage-3-lite`)
 - [Anthropic Claude](https://www.anthropic.com/) — classification (`claude-haiku-4-5`) + generation (`claude-sonnet-4-6`)
 - [rank-bm25](https://github.com/dorianbrown/rank_bm25) — keyword search
-- slowapi — rate limiting (10/min `/chat`, 30/min `/feedback`)
+- slowapi — rate limiting (10/min `/chat`, 30/min `/feedback` and `/patch/pd`)
 - New Relic APM — request tracing, external call instrumentation (Anthropic, Voyage AI), cache hit/miss metrics, pd-patch validation failure tracking
 - [Langfuse](https://langfuse.com) (self-hosted on Railway) — LLM-native tracing: token accounting (input/output/cache-read), trace trees (classify → embed → retrieve → generate), cost attribution
 - Postgres (Railway) via SQLAlchemy — response and feedback store; falls back to a local SQLite file (`feedback.db`) when `DATABASE_URL` is unset

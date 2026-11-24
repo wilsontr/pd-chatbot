@@ -92,6 +92,11 @@ jobs:
           commit_user_name: github-actions[bot]
           commit_user_email: github-actions[bot]@users.noreply.github.com
 
+      - name: Install Pd (headless patch tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends puredata-core
+
       - name: Run pytest (threshold assertions)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

@@ -39,3 +39,14 @@ class PdConnection(BaseModel):
 class PdPatch(BaseModel):
     objects: list[PdObject] = Field(min_length=1, max_length=15)
     connections: list[PdConnection]
+
+
+class PdPatchDownload(PdPatch):
+    """A patch sent back by the browser for download.
+
+    The viewer renders blocks over the model's 15-box limit, so this accepts
+    them too, with a cap on both lists because it is a public request body.
+    """
+
+    objects: list[PdObject] = Field(min_length=1, max_length=200)
+    connections: list[PdConnection] = Field(max_length=1000)

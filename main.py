@@ -21,7 +21,7 @@ load_dotenv()
 
 from fastapi import FastAPI, Request, Depends, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
@@ -34,6 +34,8 @@ from agent.chat import stream_chat
 from agent.events import Artifact, Done, Sources, TextDelta, ToolCall, ToolResult
 from agent.observability import flush as flush_tracing
 from feedback_store import FeedbackStore, UnknownMessageError
+from pd_file import to_pd
+from pd_schema import PdPatchDownload
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +213,17 @@ async def feedback_endpoint(request: Request, req: FeedbackRequest):
         raise HTTPException(status_code=404, detail="Unknown message")
 
     return {"status": "ok"}
+
+@app.post("/patch/pd", dependencies=[Depends(require_api_key)])
+@limiter.limit("30/minute")
+async def patch_file_endpoint(request: Request, patch: PdPatchDownload):
+    """Convert a rendered patch diagram to a downloadable .pd file."""
+    return Response(
+        to_pd(patch),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="patch.pd"'},
+    )
+
 
 @app.get("/health")
 async def health():

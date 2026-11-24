@@ -1,3 +1,7 @@
+import { useState } from 'react'
+import { Download } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { downloadPatch } from '../lib/pdDownload'
 import { layoutPatch, computeViewBox, graphicLabel } from '../lib/pdLayout'
 import type { LayoutNode } from '../lib/pdLayout'
 import type { PdPatch, PdObject } from '../types'
@@ -114,6 +118,26 @@ function parsePatch(json: string): { patch: PdPatch } | { error: string } {
   return { patch: { ...patch, objects } }
 }
 
+function DownloadButton({ patch }: { patch: PdPatch }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'failed'>('idle')
+
+  async function handleClick() {
+    setState('busy')
+    setState(await downloadPatch(patch) ? 'idle' : 'failed')
+  }
+
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      <Button variant="outline" size="xs" disabled={state === 'busy'} onClick={handleClick}>
+        <Download /> Download .pd
+      </Button>
+      {state === 'failed' && (
+        <span role="alert" className="text-xs text-destructive">Download failed. Please try again.</span>
+      )}
+    </div>
+  )
+}
+
 export function PdPatchViewer({ json }: { json: string }) {
   const result = parsePatch(json)
 
@@ -133,7 +157,8 @@ export function PdPatchViewer({ json }: { json: string }) {
   const objMap = new Map(patch.objects.map(o => [o.id, o]))
 
   return (
-    <div className="overflow-x-auto my-3 rounded border border-black/20 inline-block max-w-full" data-patch-json={json}>
+    <div className="my-3">
+    <div className="overflow-x-auto rounded border border-black/20 inline-block max-w-full" data-patch-json={json}>
       <svg
         width={svgW}
         height={svgH}
@@ -221,6 +246,8 @@ export function PdPatchViewer({ json }: { json: string }) {
           )
         })}
       </svg>
+    </div>
+    <DownloadButton patch={patch} />
     </div>
   )
 }
