@@ -16,6 +16,7 @@ from rank_bm25 import BM25Okapi
 import anthropic
 from langfuse import get_client as _get_langfuse
 from pd_schema import PdPatch
+from model_config import ANSWER_MODEL, max_tokens_for, thinking_kwargs
 from llm_response import text_of
 from evaluation.judge import score_faithfulness
 from evaluation.retry import with_retries
@@ -114,7 +115,16 @@ SYSTEM_PROMPT = (
     "If the excerpts don't contain enough information to answer confidently, say so plainly "
     "instead of filling the gap with a plausible-sounding guess. "
     "Include relevant object names and brief examples where helpful. "
-    "Cite the source URLs at the end of your answer.\n\n"
+    "Citation rules (these override anything else about sources):\n"
+    "- Every URL you cite must be copied character-for-character from a line starting with "
+    "\"Source:\" in the excerpts above. Never invent, shorten, guess, normalise or reconstruct a URL.\n"
+    "- Never cite a URL that does not appear in the excerpts, even if you believe it exists. Do not "
+    "construct pd.iem.sh links, manual page paths, or section anchors from memory.\n"
+    "- End every answer with a \"Sources:\" section: one bullet per source you actually used, each "
+    "bullet copied exactly as it appears after \"Source:\". If the excerpts contain no URL, write "
+    "\"Sources: none in the provided excerpts\" instead of guessing.\n"
+    "- Attribute each specific claim to the excerpt heading that supports it, and never attribute a "
+    "claim to a source that does not support it.\n\n"
     "Formatting rules:\n"
     "- Write individual Pd object names inline as `[osc~]` (backtick code spans).\n"
     "- When your answer includes a concrete patch example or signal chain (two or more "
@@ -422,8 +432,14 @@ def _build_chat_messages(
     question: str,
     context_chunks: list[Chunk],
     history: list[HistoryItem],
+    system_prompt: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Assemble the system block and messages list for a Claude generation call."""
+    """Assemble the system block and messages list for a Claude generation call.
+
+    ``system_prompt`` lets the evaluation harness score an alternative prompt
+    against the same retrieval and context without editing production code; it
+    defaults to the shipped SYSTEM_PROMPT.
+    """
     context_parts = []
     for chunk in context_chunks:
         source = chunk.get("source", "")
@@ -442,7 +458,7 @@ def _build_chat_messages(
     # at 10% of normal input token cost.
     system_block = [{
         "type": "text",
-        "text": SYSTEM_PROMPT,
+        "text": system_prompt or SYSTEM_PROMPT,
         "cache_control": {"type": "ephemeral"},
     }]
 
@@ -473,16 +489,17 @@ def generate_response(question: str, context_chunks: list[Chunk], history: list[
         history = []
     system_block, messages = _build_chat_messages(question, context_chunks, history)
     obs_cm = _start_obs_ctx("generate_response", as_type="generation",
-                            model="claude-sonnet-4-6",
+                            model=ANSWER_MODEL,
                             input=question,
                             metadata={"chunk_count": len(context_chunks)})
     with obs_cm as obs:
         response = with_retries(
             llm.messages.create,
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
+            model=ANSWER_MODEL,
+            max_tokens=max_tokens_for(ANSWER_MODEL),
             system=system_block,
-            messages=messages
+            messages=messages,
+            **thinking_kwargs(ANSWER_MODEL),
         )
         obs.update(output=text_of(response), usage_details=_token_usage(response))
     return text_of(response)
@@ -503,10 +520,11 @@ async def _async_generate_response_stream(
     system_block, messages = _build_chat_messages(question, context_chunks, history)
     with newrelic.agent.ExternalTrace('anthropic', 'api.anthropic.com', 'POST'):
         async with async_llm.messages.stream(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
+            model=ANSWER_MODEL,
+            max_tokens=max_tokens_for(ANSWER_MODEL),
             system=system_block,
             messages=messages,
+            **thinking_kwargs(ANSWER_MODEL),
         ) as stream:
             async for text in stream.text_stream:
                 yield text
@@ -576,7 +594,7 @@ async def async_stream_chat(question: str, history: list[HistoryItem] | None = N
         yield {"type": "meta", "sources": _chunks_to_sources(context_chunks), "query_type": classification["query_type"]}
 
         gen = _start_obs("generate_response", as_type="generation",
-                         model="claude-sonnet-4-6",
+                         model=ANSWER_MODEL,
                          input=question,
                          metadata={"chunk_count": len(context_chunks)})
         full_text = ""

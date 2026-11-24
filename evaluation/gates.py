@@ -5,17 +5,24 @@ own gate because every run costs money, so it is sampled, run from CI rather
 than from pytest, and fails the build on a regression instead of asserting a
 threshold after the fact.
 
-Baseline measured 2026-11-23 on the first 10 entries of
-``evaluation/golden_dataset.json`` (claude-sonnet-4-6 generation, judged by
-claude-haiku-4-5, 1-5 rubric): faithfulness 4.8-4.9, relevance 5.0, citation
-correctness 4.6. Faithfulness already varies by 0.1 between identical runs, so
-the thresholds sit a clear margin below the observed means: tight enough to
-catch a prompt change that makes answers less grounded, loose enough that judge
-noise alone does not fail a PR.
+Baseline measured 2026-11-24 on all 30 entries, 2 trials, with the shipping
+models (claude-haiku-5-5 generation, claude-haiku-4-5 judge, 1-5 rubric):
+faithfulness 4.92, relevance 4.87, citation correctness 4.58. Identical runs
+move a mean by up to ~0.1, so the thresholds sit a clear margin below the
+observed means: tight enough to catch a prompt change that makes answers less
+grounded, loose enough that judge noise alone does not fail a PR.
 
-Citation correctness is reported but not gated — it is the noisiest dimension
-(observed min 2 with mean 4.6 on the same sample) because the judge reacts to
-missing URLs as much as wrong ones.
+Citation correctness is gated as a *collapse guard*, not as a precision
+instrument. It used to be reported only, because it is the noisiest dimension
+(individual entries score as low as 2). Once the prompt was hardened so URLs
+must be copied verbatim from the excerpts, the 30-entry mean moved from
+4.37-4.48 to 4.58. On the 10-entry CI prefix the same configuration measures
+4.40, and with 10 integer-scored entries a mean moves ~0.2 run-to-run, so a
+threshold close to 4.40 would be flaky and one close to the old 4.4 baseline
+would not detect the regression at all. The 4.0 threshold is therefore a floor
+that catches citation collapse (invented or missing URLs driving scores toward
+3); the 30-entry comparison in docs/MODEL_COMPARISON.md remains the precise
+instrument for citation quality.
 
 This module is deliberately dependency-free (no rag, chroma or API clients) so
 the gate logic is unit-testable without keys.
@@ -25,16 +32,22 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-# Means on the 1-5 judge scale below which the build fails.
+from model_config import ANSWER_MODEL, JUDGE_MODEL
+
+# Means on the 1-5 judge scale below which the build fails. 30-entry baselines
+# (2026-11-24) are 4.92 / 4.87 / 4.58; the 10-entry CI prefix measures lower for
+# citation (4.40), which is why that threshold is a floor rather than a tight
+# bound — see the module docstring.
 GENERATION_THRESHOLDS: dict[str, float] = {
     "faithfulness": 4.0,
     "relevance": 4.5,
+    "citation_correctness": 4.0,
 }
 
 # The CI gate is bounded by design: cost scales linearly with the sample.
 CI_SAMPLE_SIZE = 10
-CI_MODEL = "claude-sonnet-4-6"
-CI_JUDGE_MODEL = "claude-haiku-4-5"
+CI_MODEL = ANSWER_MODEL
+CI_JUDGE_MODEL = JUDGE_MODEL
 
 
 def _mean_key(dimension: str) -> str:

@@ -1,7 +1,7 @@
 """Generation evaluation: produce answers and score them via LLM-as-judge.
 
 Supports:
-  - Single-model evaluation (default Sonnet)
+  - Single-model evaluation (default is model_config.ANSWER_MODEL)
   - Model comparison (Sonnet vs Haiku vs any model, including other providers)
   - Subset sampling (evaluating every question burns tokens)
 
@@ -11,12 +11,20 @@ DeepSeek's OpenAI-compatible API (requires DEEPSEEK_API_KEY) instead of Anthropi
 
 import logging
 import os
+import statistics
+import time
 from typing import Any
 
 import anthropic
 import openai
 
 from llm_response import text_of
+from model_config import (
+    ANSWER_MODEL,
+    JUDGE_MODEL,
+    max_tokens_for as _max_tokens_for,
+    thinking_kwargs,
+)
 
 from .dataset import GoldenDataset
 from .judge import evaluate_generation, compare_models
@@ -32,24 +40,6 @@ from rag import (
 logger = logging.getLogger(__name__)
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-
-# deepseek-v4-pro is a reasoning model — its hidden reasoning_content tokens count
-# against the same completion budget as the visible answer, so a plain 4096 cap risks
-# truncating the answer entirely (observed: one call spent 3298/4096 tokens on reasoning
-# alone). Give it more headroom; other deepseek models keep the default.
-_DEEPSEEK_MAX_TOKENS = {
-    "deepseek-v4-pro": 16000,
-}
-
-# Claude 5.5 models think before answering by default, and those tokens count
-# against max_tokens. 4096 can therefore be spent on reasoning with the answer
-# truncated mid-sentence, which would score the model down for a budget problem
-# rather than a quality one. Same treatment as deepseek-v4-pro above.
-_MAX_TOKENS_OVERRIDES = {
-    "claude-sonnet-5-5": 16000,
-    "claude-haiku-5-5": 16000,
-}
-_DEFAULT_MAX_TOKENS = 4096
 
 _deepseek_client: openai.OpenAI | None = None
 
@@ -81,12 +71,6 @@ PRICING_PER_MTOK: dict[str, dict[str, float]] = {
 
 def _is_deepseek_model(model: str) -> bool:
     return model.lower().startswith("deepseek")
-
-
-def _max_tokens_for(model: str) -> int:
-    return _MAX_TOKENS_OVERRIDES.get(
-        model, _DEEPSEEK_MAX_TOKENS.get(model, _DEFAULT_MAX_TOKENS)
-    )
 
 
 def _cost_usd(model: str, usage: dict[str, int]) -> float | None:
@@ -124,6 +108,7 @@ def _generate(
     question: str,
     context_chunks: list[dict[str, Any]],
     history: list[dict[str, str]] | None = None,
+    system_prompt: str | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Generate a response with a specific model, routing to the right provider.
 
@@ -135,7 +120,9 @@ def _generate(
     """
     if history is None:
         history = []
-    system_block, messages = _build_chat_messages(question, context_chunks, history)
+    system_block, messages = _build_chat_messages(
+        question, context_chunks, history, system_prompt=system_prompt
+    )
 
     if _is_deepseek_model(model):
         # DeepSeek's chat-completions API takes a flat messages list with the system
@@ -162,6 +149,7 @@ def _generate(
         max_tokens=_max_tokens_for(model),
         system=system_block,
         messages=messages,
+        **thinking_kwargs(model),
     )
     u = response.usage
     usage = {
@@ -175,10 +163,11 @@ def _generate(
 def run_generation_eval(
     *,
     dataset: GoldenDataset,
-    model: str = "claude-sonnet-4-6",
-    judge_model: str = "claude-haiku-4-5",
+    model: str = ANSWER_MODEL,
+    judge_model: str = JUDGE_MODEL,
     compare: list[str] | None = None,
     sample: int | None = None,
+    system_prompt: str | None = None,
     verbose: bool = False,
 ) -> dict[str, Any]:
     """Run generation evaluation.
@@ -189,6 +178,8 @@ def run_generation_eval(
         judge_model: Model used for LLM-as-judge scoring
         compare: Optional list of additional models for comparison
         sample: Limit to N entries (None = all)
+        system_prompt: Alternative system prompt to score instead of the shipped
+            one (prompt-variant experiments); None uses rag.SYSTEM_PROMPT
         verbose: Print progress
 
     Returns:
@@ -220,11 +211,18 @@ def run_generation_eval(
 
         model_answers: dict[str, str] = {}
         model_usage: dict[str, dict[str, int]] = {}
+        model_latency_ms: dict[str, float] = {}
         for m in models_to_run:
             try:
-                answer, usage = _generate(client, m, entry.question, chunks, entry.history)
+                started = time.perf_counter()
+                answer, usage = _generate(
+                    client, m, entry.question, chunks, entry.history,
+                    system_prompt=system_prompt,
+                )
+                latency_ms = (time.perf_counter() - started) * 1000
                 model_answers[m] = answer
                 model_usage[m] = usage
+                model_latency_ms[m] = latency_ms
                 if verbose:
                     print(f"  [{m}] generated ({len(answer)} chars, "
                           f"{usage['input_tokens']}in/{usage['output_tokens']}out tokens)")
@@ -232,6 +230,7 @@ def run_generation_eval(
                 logger.error("Generation failed for %s with %s: %s", entry.id, m, exc)
                 model_answers[m] = f"[ERROR: {exc}]"
                 model_usage[m] = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+                model_latency_ms[m] = 0.0
 
         if len(model_answers) > 1:
             scores = compare_models(
@@ -250,6 +249,7 @@ def run_generation_eval(
                     "answer": model_answers[m_name],
                     "scores": m_scores,
                     "usage": model_usage[m_name],
+                    "latency_ms": round(model_latency_ms.get(m_name, 0.0), 1),
                 }
                 results[m_name].append(entry_result)
                 if verbose:
@@ -271,6 +271,7 @@ def run_generation_eval(
                 "answer": model_answers[m],
                 "scores": scores,
                 "usage": model_usage[m],
+                "latency_ms": round(model_latency_ms.get(m, 0.0), 1),
             }
             results[m].append(entry_result)
             if verbose:
@@ -345,6 +346,18 @@ def run_generation_eval(
                         (sum(costs) + judge_total) / len(entries_list), 5
                     )
 
+        latencies = [
+            e["latency_ms"] for e in entries_list if e.get("latency_ms") is not None
+        ]
+        if latencies:
+            ordered = sorted(latencies)
+            # Nearest-rank p95: the value at the 95th percentile index.
+            p95_index = max(0, min(len(ordered) - 1, int(round(0.95 * len(ordered))) - 1))
+            model_summary["avg_latency_ms"] = round(sum(ordered) / len(ordered), 1)
+            model_summary["p50_latency_ms"] = round(statistics.median(ordered), 1)
+            model_summary["p95_latency_ms"] = round(ordered[p95_index], 1)
+            model_summary["max_latency_ms"] = round(max(ordered), 1)
+
         summary["per_model"][m_name] = model_summary
 
     summary["entries"] = [
@@ -356,6 +369,7 @@ def run_generation_eval(
                 for dim, s in m["scores"].items()
             },
             "usage": m.get("usage"),
+            "latency_ms": m.get("latency_ms"),
         }
         for model_results in results.values()
         for m in model_results

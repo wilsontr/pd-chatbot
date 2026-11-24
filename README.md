@@ -48,7 +48,12 @@ Retrieval quality is measured and regressed in CI — see **[Evaluation Results]
 
 ### Response Generation
 
-Retrieved chunks are passed as context to Claude Sonnet, which streams a response grounded in the documentation via Server-Sent Events (SSE). The frontend begins rendering tokens as they arrive, so answers start appearing within ~1 second of retrieval completing. Responses may include:
+Retrieved chunks are passed as context to Claude Haiku 5.5 (see
+[`model_config.py`](model_config.py)), which streams a response grounded in the
+documentation via Server-Sent Events (SSE). The frontend renders tokens as they
+arrive; measured on 2026-11-24, the first token lands at ~4.7 s and a typical
+answer completes in ~8 s (the previous Sonnet 4.6 setup: ~0.6 s to first token,
+~14 s to complete). Responses may include:
 
 - Inline `[object~]` references in code spans
 - Markdown tables for structured object comparisons
@@ -82,10 +87,13 @@ correctness scored by a Claude-as-judge rubric (LLM-as-judge). A sampled run
 runs in CI on every push to `main`, so [EVAL.md](docs/EVAL.md) publishes
 current generation numbers next to the retrieval tables.
 
-**Model choice**: five models measured on all 30 entries over 2 trials — gated
-quality is tied within noise, citation correctness is not. See
-**[MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md)** for the measured cost per
-query and the recommendation.
+**Model choice**: five models were measured on all 30 entries over 2 trials.
+Gated quality was tied within noise, so the answer model is chosen on cost and
+citations: `claude-haiku-5-5` now answers, after a citation-hardened prompt
+brought its citation score to parity with the previous `claude-sonnet-4-6` at
+about a sixth of the production cost per query. See
+**[MODEL_COMPARISON.md](docs/MODEL_COMPARISON.md)** for the measurements and the
+decision.
 
 **CI gating — retrieval**: `pytest tests/` asserts thresholds (recall@5 ≥ 60%,
 MRR ≥ 0.30, hybrid ≥ both baselines). Runs on every PR and push.
@@ -97,16 +105,20 @@ fails the build when a mean drops below threshold.
 
 | Setting | Value |
 |---|---|
-| Generation model | `claude-sonnet-4-6` |
+| Generation model | `claude-haiku-5-5` (set in `model_config.py`) |
 | Judge model | `claude-haiku-4-5` (1–5 rubric) |
 | Sample | 10 of 30 golden entries, deterministic prefix |
-| Gate | faithfulness ≥ 4.0, relevance ≥ 4.5 |
-| Cost bound | ~$0.031/query measured → **~$0.32 per PR run** (generation + judge tokens; retrieval calls are extra) |
+| Gate | faithfulness ≥ 4.0, relevance ≥ 4.5, citation ≥ 4.0 (collapse guard) |
+| Cost bound | **~$0.12 per PR run** (10 generations + 30 judge calls at measured rates) |
 
-Citation correctness is reported but not gated: it is the noisiest dimension
-(baseline mean 4.6 with a minimum of 2). Every run states its sample, both
-models and the measured dollars in the GitHub job summary, so cost is visible
-rather than assumed. Thresholds and their rationale live in
+Citation correctness is gated as a collapse guard: the system prompt requires
+URLs to be copied verbatim from the retrieved excerpts, which lifted the
+30-entry mean from ~4.4 to ~4.6, and the gate catches a prompt that reintroduces
+invented or missing URLs (scores heading toward 3). The 10-entry CI sample is
+too small for a tighter citation bound, so the 30-entry comparison remains the
+precise measurement. Every run states its sample, both models and the measured
+dollars in the GitHub job summary, so cost is visible rather than assumed.
+Thresholds and their rationale live in
 [`evaluation/gates.py`](evaluation/gates.py).
 
 ```bash
