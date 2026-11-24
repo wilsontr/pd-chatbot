@@ -225,6 +225,65 @@ class TestGenerationArms:
         assert summary["mode"] == "both"
         assert len(summary["entries"]) == 2
 
+    def test_both_arms_get_the_same_patch_count_canonicalisation(
+        self, gen, monkeypatch, tmp_path
+    ):
+        # The repair is answer canonicalisation, not an agent capability: the
+        # pipeline baseline must be judged on the same canonical diagram.
+        from evaluation.dataset import GoldenDataset
+
+        path = tmp_path / "ds.json"
+        path.write_text(json.dumps([{"id": "t_1", "question": "q1"}]))
+        dataset = GoldenDataset(path)
+        chunk = {
+            "id": "p1",
+            "object_name": "snapshot~",
+            "heading_path": "snapshot~",
+            "text": (
+                "Object: snapshot~\n\nInlets:\n"
+                "1st | bang - convert a signal to a float.\n\n"
+                "Outlets:\n1st | float - the converted signal at every bang.\n"
+            ),
+        }
+        wrong_patch = (
+            "```pd-patch\n"
+            '{"objects": [{"id": "0", "type": "obj", "text": "snapshot~", '
+            '"inlets": 2, "outlets": 1}], "connections": []}\n'
+            "```"
+        )
+        monkeypatch.setattr(
+            gen, "retrieve", lambda q, h=None: ([chunk], {"query_type": "both"})
+        )
+        monkeypatch.setattr(
+            gen, "_generate",
+            lambda *a, **k: (wrong_patch,
+                             {"input_tokens": 1, "output_tokens": 1,
+                              "cache_read_tokens": 0}),
+        )
+        monkeypatch.setattr(
+            gen, "_agent_answer",
+            lambda model, entry, system_prompt=None: SimpleNamespace(
+                answer=wrong_patch,
+                chunks=[chunk],
+                usage={"input": 1, "output": 1, "cache_read": 0},
+                tool_calls=1, retrieval_calls=1, turns=2,
+            ),
+        )
+        judged: list[str] = []
+
+        def fake_judge(*args, **kwargs):
+            judged.append(kwargs["answer"])
+            return {d: {"score": 4, "explanation": ""}
+                    for d in ("faithfulness", "relevance", "citation_correctness")}
+
+        monkeypatch.setattr(gen, "evaluate_generation", fake_judge)
+        gen.run_generation_eval(dataset=dataset, mode="both")
+
+        assert len(judged) == 2
+        for answer in judged:
+            raw = answer.split("```pd-patch")[1].split("```")[0].strip()
+            assert json.loads(raw)["objects"][0]["inlets"] == 1
+
     def test_agent_entry_without_chunks_is_counted_as_skipped(
         self, gen, monkeypatch, tmp_path
     ):

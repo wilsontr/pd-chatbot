@@ -93,7 +93,13 @@ async def _run_agent(
                     (event.data or {}).get("headings") or []
                 )
     state = loop.state
-    return state.answer, list(state.chunks), steps, state.turns
+    # Same canonicalisation as agent.chat.answer_question (the path the eval and
+    # the app use), so a probe measures the shipped answer rather than the raw
+    # model text. The loop itself stays free of docs/patch policy.
+    from agent.patch_counts import repair_patch_counts
+
+    answer, _repairs = repair_patch_counts(state.answer, list(state.chunks))
+    return answer, list(state.chunks), steps, state.turns
 
 
 def probe_entry(

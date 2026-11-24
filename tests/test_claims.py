@@ -141,6 +141,26 @@ class TestLineListOrder:
             "`0.8 500`)."
         ) is None
 
+    def test_allows_rejecting_the_list_approach_outright(self):
+        # Recorded false positive on the pipeline arm, trial 2 of the TASK-5.24
+        # run: the sentence says the docs do NOT describe a list for this and
+        # that it would not rely on one.
+        assert claims.check_line_list_order(
+            "The excerpt also notes that a list of two floats distributes its "
+            "values across the inlets as usual in Pd, but it does not describe a "
+            "list as a way to set the time before the target, so I would not rely "
+            "on a list for this."
+        ) is None
+
+    def test_allows_time_before_target_for_separate_message_boxes(self):
+        # Recorded false positive on the agent arm of the TASK-5.24 CI run: the
+        # parenthetical describes the order of two separate messages, not a list.
+        assert claims.check_line_list_order(
+            "The ordering of the two message boxes in the patch (the time before "
+            "the target) is what matters; in practice you would trigger them in "
+            "that sequence."
+        ) is None
+
     def test_still_flags_recommending_a_list_to_send_the_time_first(self):
         # Recorded true positive from the pipeline arm, trial 2 of the same run:
         # the answer recommends a list even though its own parenthetical says the
@@ -271,6 +291,17 @@ class TestPromptContract:
         prompt = " ".join(AGENT_SYSTEM_PROMPT.split())
         assert "A reference inlet table has one row per inlet" in prompt
         assert "Count rows, not message types" in prompt
+
+    def test_agent_prompt_forbids_a_second_inlet_when_the_table_lists_one(self):
+        # TASK-5.24: the pd-patch repair fixes the JSON, but the prose still
+        # mentioned a "right inlet" for single-inlet snapshot~.
+        prompt = " ".join(AGENT_SYSTEM_PROMPT.split())
+        assert (
+            'Never refer to a "right inlet" or "second inlet" for an object whose '
+            "reference table lists only one inlet row" in prompt
+        )
+        assert "do not mention a right inlet even to say it is unused" in prompt
+        assert 'Never refer to a "right inlet"' not in SYSTEM_PROMPT
 
     def test_the_pipeline_arm_does_not_carry_the_attribution_fix(self):
         # The comparison stays honest: only the tool-use arm is changed.

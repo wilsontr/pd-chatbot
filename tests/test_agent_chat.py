@@ -8,6 +8,7 @@ they need neither an API key nor the Chroma index.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import patch
 
@@ -91,9 +92,14 @@ class StubTool:
 TOOLS = ToolRegistry([StubTool()])
 
 
-def drain(question: str, history=None, *, client=None) -> list[Any]:
+def drain(question: str, history=None, *, client=None, tools=None) -> list[Any]:
     async def go():
-        return [e async for e in chat.stream_chat(question, history, client=client, tools=TOOLS)]
+        return [
+            e
+            async for e in chat.stream_chat(
+                question, history, client=client, tools=tools or TOOLS
+            )
+        ]
 
     return asyncio.run(go())
 
@@ -276,6 +282,90 @@ class TestEventStream:
         assert isinstance(events[-1], Done)
         assert "Something went wrong" in events[-1].answer
         assert isinstance(events[0], Sources)
+
+
+class TestPatchCountRepair:
+    """The patch diagram's counts must agree with the excerpts that answered it."""
+
+    SNAPSHOT_CHUNK = {
+        "id": "parent-snapshot",
+        "heading_path": "snapshot~",
+        "text": (
+            "Object: snapshot~\n\nInlets:\n"
+            "1st | bang - convert a signal to a float. | set <float> - set a float "
+            "value for the next DSP block.\n\nOutlets:\n"
+            "1st | float - the converted signal at every bang.\n"
+        ),
+        "url": "https://pd.iem.sh/objects/snapshot~/",
+        "source": "iem_reference",
+        "content_type": "object_reference",
+        "object_name": "snapshot~",
+    }
+
+    WIRED_PATCH = (
+        '{"objects": [{"id": "0", "type": "obj", "text": "osc~ 440", '
+        '"inlets": 2, "outlets": 1}, {"id": "1", "type": "obj", '
+        '"text": "snapshot~", "inlets": 2, "outlets": 1}], '
+        '"connections": [{"srcId": "0", "srcOutlet": 0, "dstId": "1", '
+        '"dstInlet": 0}]}'
+    )
+
+    class SnapshotTool:
+        spec = ToolSpec(
+            name="search_docs", description="stub", input_schema={"type": "object"}
+        )
+
+        def run(self, arguments):
+            return ToolOutcome(
+                content="[IEM Object Reference: snapshot~] ...",
+                summary="1 section for 'snapshot~'",
+                chunks=(TestPatchCountRepair.SNAPSHOT_CHUNK,),
+            )
+
+    def _tools(self):
+        return ToolRegistry([self.SnapshotTool()])
+
+    def _patch_from(self, text: str) -> dict:
+        raw = text.split("```pd-patch")[1].split("```")[0].strip()
+        return json.loads(raw)
+
+    def test_stream_path_emits_the_documented_count(self):
+        text = f"Use snapshot~:\n```pd-patch\n{self.WIRED_PATCH}\n```"
+        with patch.object(chat, "classify_query", lambda q, h: IN_SCOPE), \
+             patch.object(chat, "check_faithfulness", lambda *a, **k: None):
+            events = drain(
+                "How do I use snapshot~?",
+                client=StubClient([tool_turn(), answer_turn(text)]),
+                tools=self._tools(),
+            )
+
+        artifact = next(e for e in events if isinstance(e, Artifact))
+        snapshot = next(
+            o for o in artifact.data["patch"]["objects"] if o["text"] == "snapshot~"
+        )
+        assert snapshot["inlets"] == 1
+        # The Done answer carries the repaired JSON, not the model's raw count.
+        done_snapshot = next(
+            o
+            for o in self._patch_from(events[-1].answer)["objects"]
+            if o["text"] == "snapshot~"
+        )
+        assert done_snapshot["inlets"] == 1
+
+    def test_eval_path_repairs_patch_counts_too(self):
+        # answer_question is what the generation eval scores; it must ship the
+        # same canonical diagram as the serving path.
+        text = f"Use snapshot~:\n```pd-patch\n{self.WIRED_PATCH}\n```"
+        result = asyncio.run(
+            chat.answer_question(
+                "How do I use snapshot~?",
+                client=StubClient([tool_turn(), answer_turn(text)]),
+                tools=self._tools(),
+            )
+        )
+        patch = self._patch_from(result.answer)
+        snapshot = next(o for o in patch["objects"] if o["text"] == "snapshot~")
+        assert snapshot["inlets"] == 1
 
 
 class TestInterfaceIndependence:

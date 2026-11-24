@@ -7,15 +7,16 @@ threshold after the fact.
 
 Baseline measured 2026-11-24 with the shipping configuration (claude-haiku-5-5
 with thinking disabled, claude-haiku-4-5 judge, 1-5 rubric), 30 entries x 3
-trials: faithfulness 4.50 ± 0.13, relevance 4.81 ± 0.05, citation correctness
-4.49 ± 0.17. That baseline is *after* the TASK-5.22 judge-rubric correction
+trials: faithfulness 4.63 ± 0.14, relevance 4.81 ± 0.02, citation correctness
+4.50 ± 0.09. That baseline is *after* the TASK-5.22 judge-rubric correction
 (the judge now states Pd's inlet/outlet ordering rule and is controlled in both
-directions by ``evaluation/judge_controls.py``) and the TASK-5.23 object-
-attribution prompt rules; the correction moved per-entry scores by up to two
-points while leaving the gate decision unchanged. Identical runs move a mean by
-up to ~0.1 and single entries by much more, so the thresholds sit a clear margin
-below the observed means: tight enough to catch a prompt change that makes
-answers less grounded, loose enough that judge noise alone does not fail a PR.
+directions by ``evaluation/judge_controls.py``), the TASK-5.23 object-attribution
+prompt rules and the TASK-5.24 pd-patch count canonicalisation; the changes moved
+per-entry scores by up to two points while leaving the gate decision unchanged.
+Identical runs move a mean by up to ~0.1 and single entries by much more, so the
+thresholds sit a clear margin below the observed means: tight enough to catch a
+prompt change that makes answers less grounded, loose enough that judge noise
+alone does not fail a PR.
 
 Citation correctness is gated as a *collapse guard*, not as a precision
 instrument. It used to be reported only, because it is the noisiest dimension
@@ -43,7 +44,7 @@ from model_config import ANSWER_MODEL, JUDGE_MODEL
 from . import claims
 
 # Means on the 1-5 judge scale below which the build fails. The 30-entry
-# baselines (2026-11-24, corrected rubric) are 4.50 / 4.81 / 4.49; the 10-entry
+# baselines (2026-11-24, corrected rubric) are 4.63 / 4.81 / 4.50; the 10-entry
 # CI prefix measures lower for citation, which is why that threshold is a floor
 # rather than a tight bound — see the module docstring.
 GENERATION_THRESHOLDS: dict[str, float] = {

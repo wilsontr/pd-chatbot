@@ -39,6 +39,7 @@ from . import claims
 from .dataset import GoldenDataset, GoldenEntry
 from .judge import evaluate_generation
 from .retry import with_retries
+from agent.patch_counts import repair_patch_counts
 from rag import (
     retrieve,
     _build_chat_messages,
@@ -302,6 +303,10 @@ def run_generation_eval(
                         answer = f"[ERROR: {exc}]"
                         usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
                         latency_ms = 0.0
+                    # The pipeline is the agent's baseline, so it gets the same
+                    # patch-count canonicalisation the shipped path applies;
+                    # otherwise a count fix would look like an agent advantage.
+                    answer, _count_repairs = repair_patch_counts(answer, chunks)
                     scores = evaluate_generation(
                         client,
                         question=entry.question,
@@ -333,6 +338,10 @@ def run_generation_eval(
                             print("  SKIP — the agent retrieved no chunks")
                         skipped[label] += 1
                         continue
+                    # answer_question already repairs counts on the shipped path;
+                    # applying it here too keeps the eval's two arms symmetric
+                    # and idempotent when the model call is stubbed.
+                    answer, _count_repairs = repair_patch_counts(answer, chunks)
                     scores = evaluate_generation(
                         client,
                         question=entry.question,

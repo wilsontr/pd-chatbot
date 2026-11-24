@@ -32,6 +32,7 @@ from .history import HISTORY_MAX_OUTGOING, compress_history_async
 from .llm import AnthropicModelClient, ModelClient
 from .loop import AgentConfig, AgentLoop
 from .patches import canonical_patches, strip_patch_blocks, validate_and_canonicalize_blocks
+from .patch_counts import repair_patch_counts
 from .retrieval import chunks_to_sources
 from .tools import ToolRegistry
 from .tools.docs import default_tools
@@ -92,8 +93,11 @@ async def answer_question(
     ):
         pass
     state = loop.state
+    # Repair patch counts against the excerpts this run retrieved, so the eval
+    # scores the same canonical diagram the serving path emits (TASK-5.24).
+    answer, _repairs = repair_patch_counts(state.answer, list(state.chunks))
     return AgentAnswer(
-        answer=state.answer,
+        answer=answer,
         chunks=list(state.chunks),
         turns=state.turns,
         tool_calls=state.tool_calls,
@@ -237,7 +241,10 @@ async def stream_chat(
             return
 
         state = loop.state
-        answer, patch_failed = validate_and_canonicalize_blocks(state.answer)
+        repaired_answer, _count_repairs = repair_patch_counts(
+            state.answer, list(state.chunks)
+        )
+        answer, patch_failed = validate_and_canonicalize_blocks(repaired_answer)
         if patch_failed:
             newrelic.agent.record_custom_metric("Custom/Agent/PdPatchInvalid", 1)
             if observability.langfuse() is not None:

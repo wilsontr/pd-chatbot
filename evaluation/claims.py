@@ -58,12 +58,28 @@ _ORDER_STATEMENT_RE = re.compile(r"right[\s-]?to[\s-]?left")
 _TIME_THEN_TARGET_THEN_LIST_RE = re.compile(
     r"\btime\b[^.\n]{0,40}\btarget\b[^.\n]{0,40}\blists?\b"
 )
-_TIME_THEN_TARGET_PAREN_RE = re.compile(r"\((?:the\s+)?time\b[^)\n]{0,40}\btarget\b")
+#: A parenthetical that *sequences* time before target, e.g. "(time, then
+#: target, ...)". It only counts when the sentence also contains the two-number
+#: literal the ordering refers to: "(the time before the target)" describing two
+#: separate message boxes is correct advice, not a reversed list (recorded false
+#: positive on the agent arm of the TASK-5.24 CI run).
+_TIME_THEN_TARGET_PAREN_RE = re.compile(
+    r"\((?:the\s+|a\s+)?time\b[^)\n]{0,20}\bthen\b[^)\n]{0,20}\btarget\b"
+)
 #: The correct advice is to send the two values separately, which mentions the
 #: same words in the same order and must not be flagged.
 _SEPARATE_ADVICE_RE = re.compile(
     r"separate|separately|individually|one at a time|"
     r"not as a (?:single )?list|instead of a (?:single )?list|rather than a list"
+)
+#: A sentence that *rejects* the list approach ("the excerpt does not describe a
+#: list as a way to set the time before the target, so I would not rely on a
+#: list") contains the same words as the wrong advice. Recorded on the pipeline
+#: arm, trial 2 of the TASK-5.24 re-run.
+_LIST_REJECTION_RE = re.compile(
+    r"\b(?:does not|doesn't|do not|don't|would not|wouldn't|cannot|can't|never)\b"
+    r"[^.\n]{0,40}\b(?:describe|use|rely on|rely|recommend|suggest|trust)\b"
+    r"[^.\n]{0,30}\blists?\b"
 )
 #: "ramp to <target> over <ms> ms" next to a two-number list literal: the literal
 #: must be "<target> <ms>", because Pd fills inlets left to right.
@@ -223,10 +239,15 @@ def check_line_list_order(text: str) -> str | None:
       suppresses the prose signal in that sentence rather than being flagged by
       it. Recorded false positive on the agent arm, trial 2 of the TASK-5.23 run.
 
-    Advice to send the two values as separate messages is correct and is skipped.
+    Advice to send the two values as separate messages is correct and is skipped,
+    as is a sentence that rejects the list approach outright ("the excerpt does
+    not describe a list as a way to set the time before the target" — recorded
+    false positive on the pipeline arm, trial 2 of the TASK-5.24 run).
     """
     for sentence in _sentences(text.lower()):
         if _SEPARATE_ADVICE_RE.search(sentence):
+            continue
+        if _LIST_REJECTION_RE.search(sentence):
             continue
 
         ramp = _RAMP_RE.search(sentence)
@@ -250,7 +271,7 @@ def check_line_list_order(text: str) -> str | None:
         if match:
             return match.group(0)
         match = _TIME_THEN_TARGET_PAREN_RE.search(sentence)
-        if match:
+        if match and _NUMBER_PAIR_RE.search(sentence):
             return match.group(0)
     return None
 

@@ -148,29 +148,32 @@ above — the tables and the mean ± std are in [EVAL.md](docs/EVAL.md)):
 
 | | Faithfulness | Relevance | Citation | Cost/query | p50 | p95 |
 |---|---|---|---|---|---|---|
-| Pipeline | 4.50 ± 0.13 | 4.81 ± 0.05 | 4.49 ± 0.17 | $0.0110 | 3.7 s | 5.5 s |
-| Agent | 4.66 ± 0.21 | 4.88 ± 0.02 | 4.47 ± 0.07 | $0.0124 | 5.8 s | 7.8 s |
+| Pipeline | 4.63 ± 0.14 | 4.81 ± 0.02 | 4.50 ± 0.09 | $0.0110 | 3.7 s | 5.4 s |
+| Agent | 4.61 ± 0.11 | 4.86 ± 0.05 | 4.48 ± 0.10 | $0.0123 | 5.5 s | 7.6 s |
 
 The TASK-5.1 parity conclusion **holds** at 30 entries x 3 trials: the paired
-per-trial differences are faithfulness +0.16 ± 0.27, relevance +0.07 ± 0.04 and
-citation −0.02 ± 0.13 (agent − pipeline), and none is both larger than its own
-spread and at least 0.1, so the honest verdict is "matches" — the agent is
-nominally ahead on faithfulness and relevance and level on citation. What the
-agent buys is retrieval, not answer quality: its own `search_docs` calls beat
-the pipeline's single routed search at 30 entries (recall@5 79.4% vs. 75.0%,
-recall@10 82.8% vs. 75.0%, MRR 0.749 vs. 0.696, nDCG@5 0.734 vs. 0.692), and they
-do it with 1.5 tool calls per question, at +2.1 s p50 / +2.3 s p95 latency and
-+$0.0014 per query. The measured dollar cost of that run was **$2.10**. The loop
-alone does not beat a well-tuned pipeline on answer quality; what it buys is the
-mechanism — re-searching, running tools, self-correcting — that the sandbox and
-skill subtasks are measured on.
+per-trial differences are faithfulness −0.02 ± 0.12, relevance +0.05 ± 0.05 and
+citation −0.02 ± 0.02 (agent − pipeline), and none is both larger than its own
+spread and at least 0.1, so the honest verdict is "matches" — the agent is level
+on faithfulness and citation and a hair ahead on relevance. What the agent buys
+is retrieval, not answer quality: its own `search_docs` calls beat the pipeline's
+single routed search at 30 entries in the latest run (recall@5 76.1% vs. 75.0%,
+recall@10 76.1% vs. 75.0%, MRR 0.703 vs. 0.696, nDCG@5 0.697 vs. 0.692), and they
+do it with 1.5 tool calls per question, at +1.8 s p50 / +2.2 s p95 latency and
++$0.0013 per query. The agent-tool-call row is a single-turn, single-run
+measurement and is noisy — a one-line prompt change has moved recall@5 from 80.6%
+to 76.1% — so read the direction, not the exact points. The measured dollar cost
+of that run was **$2.10**. The loop alone does not beat a well-tuned pipeline on
+answer quality; what it buys is the mechanism — re-searching, running tools,
+self-correcting — that the sandbox and skill subtasks are measured on.
 
-These numbers are post-correction for the judge's inlet-order belief (TASK-5.22)
-and the agent's object-attribution prompt rules (TASK-5.23), so they are not
-directly comparable to the pre-correction table; the per-arm change from the
-TASK-5.21 baseline is pipeline faithfulness 4.71 → 4.50 and agent 4.66 → 4.66,
-with the pipeline move inside the observed single-entry judge noise (unchanged
-prompts have moved individual entries by up to two points between runs).
+These numbers are post-correction for the judge's inlet-order belief (TASK-5.22),
+the agent's object-attribution prompt rules (TASK-5.23) and pd-patch count
+canonicalisation (TASK-5.24), so they are not directly comparable to the
+pre-correction table; the per-arm change from the TASK-5.21 baseline is pipeline
+faithfulness 4.71 → 4.63 and agent 4.66 → 4.61, both inside the observed
+single-entry judge noise (unchanged prompts have moved individual entries by up
+to two points between runs).
 
 Two caveats are measured, not assumed. The judge's ordering belief was wrong in
 both directions — it scored a self-contradicting `[line~]` list example 5/5/5
@@ -179,11 +182,13 @@ inlet/outlet rules and both directions are pinned as control answers
 ([`evaluation/judge_controls.py`](evaluation/judge_controls.py)): the reversed
 control scores 1–2, the correct one 5, on every run. Single-trial per-entry
 scores are still not quoted; the citation dimension in particular swings 2 ↔ 5
-for near-identical answers. And the agent still asserts some specifics its
-excerpts do not state: the `[unpack]` outlet-order claim is fixed (warning rate
-2/3 before, 0/5 after the prompt rule), but `[snapshot~]`'s inlet count still
-leaks into pd-patch diagrams, tracked in TASK-5.24 and measured by TASK-5.7's
-calibration.
+for near-identical answers. And the agent's unsupported-specifics gap is now
+measured and closed in two steps: the `[unpack]` outlet-order claim is fixed
+(warning rate 2/3 before, 0/5 after the prompt rule), and `[snapshot~]`'s
+pd-patch count is canonicalised against the retrieved reference
+([`agent/patch_counts.py`](agent/patch_counts.py)) — `inlets: 2` appeared in 3/3
+answers before, and 0 of 180 answers in the final 30-entry run contains a
+`[snapshot~]` count other than 1, with q_006 at 5/5 on five runs.
 
 **Generation metrics**: faithfulness, answer relevance, and citation
 correctness scored by a Claude-as-judge rubric (LLM-as-judge). A sampled run
@@ -297,6 +302,15 @@ because the answer is already on the wire. Parse failures are tracked via
 New Relic (`Custom/PdPatch/ParseFailure`) and Langfuse (`pd_patch_valid`
 score); validated patches are also emitted as `artifact` events so an interface
 can render the diagram without re-parsing the prose.
+
+Inlet/outlet counts are canonicalised against the retrieved object reference
+before validation ([`agent/patch_counts.py`](agent/patch_counts.py)): a count that
+contradicts a fixed reference count is rewritten (for example `[snapshot~]`'s
+single inlet), while variable-arity objects (`[pack]`, `[dac~]`) and objects the
+excerpts do not cover are left alone, as is any object whose connections would
+fall outside the repaired count. The eval applies the same canonicalisation to
+both arms, and repairs are counted under
+`Custom/PdPatch/CountRepaired`.
 
 ### Scope gate
 
