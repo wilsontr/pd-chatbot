@@ -89,6 +89,20 @@ Two things drive these numbers:
   the tokens of 4.6), so measure end-to-end latency before switching a user-facing
   stream.
 
+## Decision (2026-11-23)
+
+**Keep `claude-sonnet-4-6`.** Gated quality is tied across the field, so a switch
+would be a pure cost play, and it costs a measurable citation regression in a
+product whose value is grounded, cited answers. The 84% saving from
+`claude-haiku-5-5` stays on the table via a citation-focused follow-up
+(TASK-9): recover citation correctness with a prompt change and re-measure with
+this same protocol, or gate citation so a future downgrade cannot regress it
+silently.
+
+No threshold change is needed while the answer model stays put. Verified for the
+candidates as well: Haiku 5.5 measures 4.85 faithfulness / 4.90 relevance against
+the 4.0 / 4.5 gate.
+
 ## Recommendation
 
 1. **Keep `claude-sonnet-4-6` as the answer model for now.** Gated quality is

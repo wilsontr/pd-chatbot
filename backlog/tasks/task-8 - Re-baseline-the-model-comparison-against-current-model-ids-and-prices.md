@@ -1,11 +1,11 @@
 ---
 id: TASK-8
 title: Re-baseline the model comparison against current model ids and prices
-status: In Progress
+status: Done
 assignee:
   - '@deepseek'
 created_date: '2026-11-23 22:57'
-updated_date: '2026-11-24 00:32'
+updated_date: '2026-11-24 01:36'
 labels:
   - evaluation
   - cost
@@ -32,8 +32,8 @@ The model-switch decision cannot currently be made from this repo. The only stor
 - [x] #3 A comparison run covers all 30 golden entries across the current production model and the candidate models, with at least 2 trials, reporting per-model mean and standard deviation for faithfulness, relevance and citation plus measured cost per query
 - [x] #4 The comparison is judged by a model outside the compared families where possible, or the judge-family bias is stated explicitly in the recorded results
 - [x] #5 Results are committed as JSON plus a markdown summary naming the date, judge model, sample size and price snapshot, so a future decision can be audited without re-running
-- [ ] #6 The outcome is recorded as a keep-or-switch decision with the quality delta and the cost delta per 1000 queries
-- [ ] #7 If a switch is chosen, the CI gate thresholds in evaluation/gates.py are re-baselined against the chosen model, since the current 4.0/4.5 values were calibrated on claude-sonnet-4-6 output
+- [x] #6 The outcome is recorded as a keep-or-switch decision with the quality delta and the cost delta per 1000 queries
+- [x] #7 If a switch is chosen, the CI gate thresholds in evaluation/gates.py are re-baselined against the chosen model, since the current 4.0/4.5 values were calibrated on claude-sonnet-4-6 output
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -70,4 +70,22 @@ Recommendation recorded: keep sonnet-4-6 for now; before switching to haiku-5-5 
 Blocker found and fixed before the run: claude-sonnet-5-5 and claude-haiku-5-5 return a thinking block first, so response.content[0].text raised AttributeError and those models could not be evaluated (or served in production). Added llm_response.text_of() at all six call sites plus max-token overrides so thinking does not truncate answers. Recorded in commit 5df8b7d.
 
 Waiting on: the user's keep-or-switch decision (AC 6/7), then either a citation follow-up task or the switch itself.
+
+Decision 2026-11-23: KEEP claude-sonnet-4-6 as the answer model. Gated quality is tied across all five models, so a switch would be a pure cost play that costs 0.17 citation points (4.65 -> 4.48 for haiku-5-5) in a citation-centric product. The 84% saving stays available through the follow-up now tracked as TASK-9 (recover citation quality with a SYSTEM_PROMPT change and re-measure, or gate citation and accept a lower threshold). No gate re-baselining is needed while the answer model stays put; the comparison also confirms every candidate passes the existing 4.0/4.5 gate (haiku-5-5: 4.85/4.90), so only CI_MODEL and the eval defaults would move if a switch happens. Decision text added to docs/MODEL_COMPARISON.md.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Re-baselined the model comparison against current models and prices, and recorded a keep decision.
+
+Pricing: PRICING_PER_MTOK now carries current published rates with sources and a sync date — claude-sonnet-5-5 and claude-haiku-5-5 added, deepseek-flash replaces the retired deepseek-v4-flash, and deepseek-v4-pro corrected from $0.435/$0.87 to $1.32/$3.96 (its old entry understated cost by ~3x). DeepSeek peak rates are recorded as an upper bound since off-peak bills at half; an unknown id now reports no cost instead of a stale one.
+
+Blocker found and fixed: claude-sonnet-5-5 and claude-haiku-5-5 return a thinking block before the text block, so response.content[0].text raised AttributeError and those models could not be evaluated (or served). llm_response.text_of() now concatenates text blocks at all six call sites, with max-token headroom so thinking does not truncate answers.
+
+Comparison: 5 models x all 30 entries x 2 trials, judged by claude-haiku-4-5, raw scores committed as docs/model_comparison_2026-11-23.json and analysed in docs/MODEL_COMPARISON.md. Both gated dimensions are tied within trial noise (faithfulness 4.79-4.99, relevance 4.82-4.92). Citation correctness is the only consistent difference: sonnet-4-6 4.65 vs 4.37-4.51 for every other model, a gap larger than the trial std. Production-equivalent cost per 1000 queries: sonnet-4-6 $27.40, sonnet-5-5 $25.40, haiku-5-5 $4.47, deepseek-flash $6.63, deepseek-v4-pro $19.87. Thinking tokens and the inline faithfulness judge are why naive per-token pricing misleads; both are quantified in the doc.
+
+Decision: keep claude-sonnet-4-6. The 84% saving from haiku-5-5 is available but currently costs a measurable citation regression, so it is deferred to TASK-9 (recover citations with a prompt change and re-measure, or gate citation), with latency to be captured as part of any switch. Every candidate already passes the existing 4.0/4.5 generation gate, so no threshold change is needed now.
+
+Verified by the committed run, docs/MODEL_COMPARISON.md, and a 102-test suite (including the 4 slow retrieval tests). Commits 5df8b7d, dab2410, af906c9 (local, unpushed by request).
+<!-- SECTION:FINAL_SUMMARY:END -->
