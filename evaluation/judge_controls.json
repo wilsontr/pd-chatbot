@@ -1,0 +1,65 @@
+{
+  "description": "Recorded q_004 answers used as control checks for the faithfulness judge's Pd inlet-order belief (TASK-5.22). The context is the agent arm's retrieval for q_004 (the `[line~]`, `[line]` and `[vline~]` reference pages the answer cites), frozen on 2026-11-24 so the control is reproducible without retrieval. Both answers are verbatim recordings: the reversed one is quoted in .tmp/notes_520.md from the TASK-5.20 run that scored 5/5/5; the correct one is run 2 of .tmp/ab_q_004_new.json, scored 2.",
+  "judge_model": "claude-haiku-4-5",
+  "controls": [
+    {
+      "id": "q_004_reversed",
+      "expect": "reversed",
+      "label": "list puts the ramp time first and calls it time-then-target",
+      "answer": "The fix is to always send the time first, or to send a list such as `1000 0.5` (time, then target, with the list distributed across the inlets as described above). Example of a correct ramp to 0.5 over 1000 ms, using a message box `1000 0.5` (a list, so the right inlet gets the time first).",
+      "recorded_scores": [
+        5,
+        5,
+        5
+      ],
+      "recorded_in": ".tmp/notes_520.md"
+    },
+    {
+      "id": "q_004_correct",
+      "expect": "correct",
+      "label": "left-to-right list example (`500 1000`) explained correctly",
+      "answer": "`[line~]` is an audio-rate ramp generator. Its left inlet takes a float to set a target value and start a ramp, or `stop` to halt it. Its outlet sends the ramp values as a signal. Its right inlet sets the ramp time in milliseconds, and the next ramp time applies to the next target you send.\n\n**The gotcha with the right inlet:** unlike almost every other inlet in Pd, the right inlet does not remember its old value. The docs state that the right inlet \"does not remember old values (unlike every other inlet in Pd). Thus, if you don't priorly specify a time in the right inlet and sent line~ a float, it jumps immediately to the target value.\" So if you send a bare target to the left inlet without first sending a time to the right inlet, the output jumps instead of ramping. The time must be sent before each ramp, and it is cleared once a ramp starts.\n\nSending a list is the usual way to avoid this. A list of two floats distributes across the inlets, so `500 1000` would set the target to 500 in the left inlet and the time to 1000 ms in the right. Because the first value goes to the leftmost inlet, the time is only sent to the right inlet as part of the list, which the docs describe as the standard distribution behaviour.\n\nFor comparison, the docs note that `[vline~]` has the same memory issue on its middle and right inlets, and `[line]` (the control version) is also similar on its middle inlet but keeps its grain setting.\n\nSources:\n- https://pd.iem.sh/objects/line~/\n- https://pd.iem.sh/objects/line/\n- https://pd.iem.sh/objects/vline~/",
+      "recorded_scores": [
+        2
+      ],
+      "recorded_in": ".tmp/ab_q_004_new.json run 2"
+    }
+  ],
+  "context_chunks": [
+    {
+      "id": "iem_parent_110",
+      "object_name": "line~",
+      "heading_path": "line~",
+      "text": "Object: line~\n\nDescription: audio ramp generator\n\nInlets:\n1st | float - set target value and start ramp. | stop - stop the ramp.\n2nd | float - set next ramp time (cleared when ramp starts).\n\nOutlets:\n1st | signal - ramp values.\n\nSee also: line, vline~\n\nThe line~ object generates linear ramps whose levels and timing are determined by messages you send it. A list of two floats distributes the value over the inlets, as usual in Pd. Note that the right inlet (that sets the ramp time in milliseconds) does not remember old values (unlike every other inlet in Pd). Thus, if you don\u2019t priorly specify a time in the right inlet and sent line~ a float, it jumps immediately to the target value.",
+      "url": "https://pd.iem.sh/objects/line~/"
+    },
+    {
+      "id": "iem_parent_109",
+      "object_name": "line",
+      "heading_path": "line",
+      "text": "Object: line\n\nDescription: send a series of linearly stepped numbers\n\nInlets:\n1st | float - set target value and start ramp. | set <float> - set initial ramp value. | stop - stop the ramp.\n2nd | float - set next ramp time (cleared when ramp starts).\n3rd | float - sets time grain in ms.\n\nOutlets:\n1st | float - ramp values.\n\nArguments:\nfloat - time grain in ms (default 20 ms).\n\nSee also: line~, vline~\n\nRamp generator.\nThe line object takes values for target/time/grain and ramps to the specified target over the time given in milliseconds,  updating its output at the \u201cgrain rate\u201d (also in milliseconds). A list up to 3 floats distributes the values to the inlets,  as usual in Pd. Note that the middle inlet (that sets the time) does not set values for the next ramp (unlike every other inlet in Pd) - thus,  sending a float to the left inlet without priorly setting a value in the middle inlet causes a jump in the output regardless of whatever time value was specified in some previous message. On the other hand,  setting a grain value persists. A grain value of 0 ir less becomes 20 (the default value). If the line object receives a message specifying some new target before reaching the previous one,  it takes off from its current value.\nCOMPATIBILITY NOTE: in Pd versions before 0.48,  a stop message followed by a new ramp message would incorrectly ramp from the previous start. It now ramps from wherever in the previous segment the object was stopped at. To get the old behavior,  set \u201ccompatibility\u201d to 0.47 or below in Pd\u2019s command line or by a message.",
+      "url": "https://pd.iem.sh/objects/line/"
+    },
+    {
+      "id": "iem_parent_160",
+      "object_name": "outlet~",
+      "heading_path": "outlet~",
+      "text": "Object: outlet~\n\nDescription: audio outlet\n\nInlets:\n1st | signal - signal to send to parent patch.\n\nArguments:\nsymbol - downsampling method: 'hold' for sample/hold (default), 'pad' for zero-padded and 'lin' for linear interpolation).\n\nSee also: block~, inlet, inlet~, outlet, pd\n\nInlets/outlets are used to receive and get information on a patch window. This can be an abstraction or a subpatch.",
+      "url": "https://pd.iem.sh/objects/outlet~/"
+    },
+    {
+      "id": "iem_parent_103",
+      "object_name": "inlet~",
+      "heading_path": "inlet~",
+      "text": "Object: inlet~\n\nDescription: audio inlet\n\nInlets:\n1st | float - set default value for no signal connected.\n\nOutlets:\n1st | signal - signal from parent patch.\n2nd | anything - any message from parent patch when give a 'fwd' argument.\n\nArguments:\nsymbol - 'fwd' to turn message forwarding on. Alternatively, you can set upsampling method: 'hold' for sample/hold (default), 'pad' for zero-padded and 'lin' for linear interpolation).\n\nSee also: block~, inlet, outlet, outlet~, pd\n\nInlets/outlets are used to receive and get information on a patch window. This can be an abstraction or a subpatch.",
+      "url": "https://pd.iem.sh/objects/inlet~/"
+    },
+    {
+      "id": "iem_parent_267",
+      "object_name": "vline~",
+      "heading_path": "vline~",
+      "text": "Object: vline~\n\nDescription: high-precision audio ramp generator\n\nInlets:\n1st | float - set target value and start ramp. | stop - stops the ramp.\n2nd | float - set next ramp time (cleared when ramp starts).\n3rd | float - sets delay time.\n\nOutlets:\n1st | signal - ramp values.\n\nSee also: line, line~\n\nThe vline~ object, like line~, generates linear ramps whose levels and timing are determined by messages you send it. It takes a target value, a time interval in milliseconds and an initial delay (also in ms). Ramps may start and stop between audio samples, in which case the output is interpolated accordingly.\nA list up to three floats distributes the values over the inlets, as usual in Pd. Note that the middle and right inlet (that sets the time and delay) do not remember old values (unlike other inlets in Pd). Thus, if you send vline~ a float without priorly specifying a ramp time and delay and sent, it jumps immediately to the target value. In the same way, a list of two values will not have a delay time if no delay time was priorly set in the right inlet.\nAny number of future ramps may be scheduled and vline~ will remember them and execute them in order. They must be specified in increasing order of initial delay however, since a segment cancels all planned segments at any future time.\n!!! BUG: vline~ objects inside reblocked subpatches can have slightly incorrect timing !!!",
+      "url": "https://pd.iem.sh/objects/vline~/"
+    }
+  ]
+}

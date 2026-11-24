@@ -78,6 +78,12 @@ class TestInletOrder:
         "to left by inlet position.",
         # Recorded false positive: answers cite the section title verbatim.
         "(Source: MSP Manual, 2.4.4 Hot and cold inlets and right to left outlet order.)",
+        # Recorded false positive on q_011, agent arm, trial 1 of the TASK-5.23
+        # run: a quoted trigger reference that says "output from right to left"
+        # and mentions the hot/cold inlet paradigm in the same sentence.
+        "- The [trigger] reference says it \"outputs its input from right to left,\" "
+        "and that \"because of the hot/cold inlet paradigm of Pd, output from right "
+        "to left is the usual output order in Pd objects.\"",
     ])
     def test_allows_the_outlet_rule_and_correct_advice(self, text):
         assert claims.check_inlet_order(text) is None
@@ -124,6 +130,28 @@ class TestLineListOrder:
             "In practice, send the time first and then the target as two separate "
             "messages, not as a single list."
         ) is None
+
+    def test_allows_a_verified_list_mentioned_beside_time_then_target_advice(self):
+        # Recorded false positive on the agent arm, trial 2 of the TASK-5.23 run:
+        # the prose says "time ... then target", but the list it offers as an
+        # alternative (`0.8 500`) matches the stated ramp, so it is correct.
+        assert claims.check_line_list_order(
+            "For example, to ramp to 0.8 over 500 ms, send the time to the right "
+            "inlet and then the target to the left inlet (or use the list "
+            "`0.8 500`)."
+        ) is None
+
+    def test_still_flags_recommending_a_list_to_send_the_time_first(self):
+        # Recorded true positive from the pipeline arm, trial 2 of the same run:
+        # the answer recommends a list even though its own parenthetical says the
+        # first element is the target.
+        assert claims.check_line_list_order(
+            "In practice, you should send the ramp time to the right inlet before "
+            "each target value, for example with a list such as `200 0` (if the "
+            "list reaches the inlets in the order described above, the first value "
+            "sets the target and the second sets the time, so check the ordering "
+            "carefully against your patch)."
+        )
 
 
 class TestCitationCheck:
@@ -218,6 +246,36 @@ class TestPromptContract:
 
     def test_prompt_separates_the_outlet_rule_from_inlet_order(self):
         assert "right-to-left rule in Pd is about outlets, not inlets" in SYSTEM_PROMPT
+
+    def test_both_arms_forbid_a_list_as_time_first_advice(self):
+        # The TASK-5.23 re-run caught a pipeline answer recommending a list
+        # (`200 0`) to "send the time first"; the rule now closes that loophole.
+        rule = "Never offer a two-element list as a way to send the time before the target"
+        assert rule in SYSTEM_PROMPT
+        assert rule in AGENT_SYSTEM_PROMPT
+
+    def test_agent_prompt_makes_object_level_conventions_concrete(self):
+        # TASK-5.23: the abstract attribution rule was not followed, so the agent
+        # prompt now spells out what it means for an object-level convention.
+        prompt = " ".join(AGENT_SYSTEM_PROMPT.split())
+        assert "An object's own behaviour must come from its own excerpt" in prompt
+        assert "\"outlets fire right to left\" is a convention the corpus states once" in prompt
+        assert "do not state it for that object" in prompt
+        # The flagging exception is explicitly closed for object-level specifics.
+        assert "does not make an object-level specific acceptable" in prompt
+        assert "omit it rather than asserting it with a caveat" in prompt
+        # ... and a convention from a related object's excerpt is not evidence.
+        assert "One object's documented behaviour is not another's" in prompt
+
+    def test_agent_prompt_counts_reference_table_rows_not_message_types(self):
+        prompt = " ".join(AGENT_SYSTEM_PROMPT.split())
+        assert "A reference inlet table has one row per inlet" in prompt
+        assert "Count rows, not message types" in prompt
+
+    def test_the_pipeline_arm_does_not_carry_the_attribution_fix(self):
+        # The comparison stays honest: only the tool-use arm is changed.
+        assert "One object's documented behaviour is not another's" not in SYSTEM_PROMPT
+        assert "does not make an object-level specific acceptable" not in SYSTEM_PROMPT
 
     def test_agent_prompt_is_the_shipped_prompt_plus_tool_rules(self):
         assert AGENT_SYSTEM_PROMPT.startswith(SYSTEM_PROMPT)

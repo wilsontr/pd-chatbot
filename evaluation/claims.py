@@ -176,15 +176,22 @@ _OTHER_SOFTWARE_RE = re.compile(r"\bmax(?:/msp)?\b|\bsupercollider\b|\breaktor\b
 def check_inlet_order(text: str) -> str | None:
     """Return the offending sentence when an answer fills inlets right to left.
 
-    Skipped sentences: one that also mentions outlets (the corpus's section title
-    is literally "Hot and cold inlets and right to left outlet order" and answers
-    cite it), and one that compares Pd's ordering with another program's.
+    Skipped sentences: one that also mentions outlets or output (the corpus's
+    section title is literally "Hot and cold inlets and right to left outlet
+    order", answers cite it, and the documented rule is phrased as "output from
+    right to left"), and one that compares Pd's ordering with another program's.
     """
     for sentence in _sentences(text):
         lowered = sentence.lower()
         if not _RIGHT_TO_LEFT_RE.search(lowered):
             continue
         if re.search(r"\boutlets?\b", lowered):
+            continue
+        # "output from right to left", including a quoted reference sentence that
+        # happens to mention the hot/cold inlet paradigm first (recorded on
+        # q_011, agent arm, trial 1 of the TASK-5.23 run). Output order is the
+        # outlet rule; the check is aimed at *inlet* filling.
+        if re.search(r"\boutputs?\b", lowered):
             continue
         if _OTHER_SOFTWARE_RE.search(lowered):
             continue
@@ -206,32 +213,45 @@ def check_citations(text: str, chunks: Sequence[Mapping[str, Any]]) -> list[str]
 def check_line_list_order(text: str) -> str | None:
     """Return the offending fragment when a ``[line~]`` list example is reversed.
 
-    Two independent signals, both taken from recorded failures:
+    Three signals, all taken from recorded answers:
 
     * prose that puts the ramp time before the target *as a list*;
     * a numeric example that contradicts itself, e.g. "ramp to 0.5 over 1000 ms
-      using `1000 0.5`" — the first list element must be the target.
+      using `1000 0.5`" — the first list element must be the target;
+    * a numeric example that *agrees* with its stated ramp (e.g. "to ramp to 0.8
+      over 500 ms ... or use the list `0.8 500`") is a correct alternative, so it
+      suppresses the prose signal in that sentence rather than being flagged by
+      it. Recorded false positive on the agent arm, trial 2 of the TASK-5.23 run.
 
     Advice to send the two values as separate messages is correct and is skipped.
     """
     for sentence in _sentences(text.lower()):
         if _SEPARATE_ADVICE_RE.search(sentence):
             continue
+
+        ramp = _RAMP_RE.search(sentence)
+        if ramp:
+            target, milliseconds = float(ramp.group(1)), float(ramp.group(2))
+            pairs = list(_NUMBER_PAIR_RE.finditer(sentence))
+            for pair in pairs:
+                first, second = float(pair.group(1)), float(pair.group(2))
+                if first == milliseconds and second == target:
+                    return f"{ramp.group(0)} ... {pair.group(0)}"
+            if any(
+                float(pair.group(1)) == target
+                and float(pair.group(2)) == milliseconds
+                for pair in pairs
+            ):
+                # The literal matches the stated ramp, so the example is right
+                # even if the sentence also talks about time before target.
+                continue
+
         match = _TIME_THEN_TARGET_THEN_LIST_RE.search(sentence)
         if match:
             return match.group(0)
         match = _TIME_THEN_TARGET_PAREN_RE.search(sentence)
         if match:
             return match.group(0)
-
-        ramp = _RAMP_RE.search(sentence)
-        if not ramp:
-            continue
-        target, milliseconds = float(ramp.group(1)), float(ramp.group(2))
-        for pair in _NUMBER_PAIR_RE.finditer(sentence):
-            first, second = float(pair.group(1)), float(pair.group(2))
-            if first == milliseconds and second == target:
-                return f"{ramp.group(0)} ... {pair.group(0)}"
     return None
 
 

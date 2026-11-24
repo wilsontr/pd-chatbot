@@ -73,6 +73,28 @@ Do NOT penalize:
 Only penalize these if they assert something false or inconsistent with the context, not
 merely for being additional detail beyond it.
 
+**Pd ordering facts to apply when checking an ordering claim or a list example:**
+Pd has two separate ordering rules, and an answer that confuses them is making an error:
+- A list arriving at an object's leftmost inlet fills that object's inlets from left to
+  right: the first value goes to the leftmost inlet, the next value to the inlet to its
+  right, and so on.
+- The right-to-left rule is about outlets, not inlets: an object with several outlets
+  sends them right to left. It says nothing about which inlet a list element reaches.
+Check a list example against the left-to-right inlet rule: a list whose first element is
+said to reach a right-hand inlet, or whose stated result puts a later element in the
+leftmost inlet, is reversed and must be penalised even when the answer also cites the
+right-to-left convention. Do not penalise a correct left-to-right description as
+fabricated merely because the excerpt says only "as usual in Pd" — that phrase refers to
+this left-to-right inlet rule. This rule is about a single list sent to an object's
+leftmost inlet: separate messages wired to separate inlets are not a list example, the
+order in which they arrive says nothing about list distribution, and a patch diagram's
+connections must not be read as a reversed list. Outlet behaviour is separate as well:
+this rule does not require any particular outlet to fire first, and mapping a list's
+elements to outlets in their position order is not an inlet-order error. This paragraph
+only settles which direction is correct; it does not relax the rest of the rubric. A
+claim about an object's behaviour that the excerpts do not state is still an unflagged
+claim beyond the context, and a claim that contradicts the excerpts is still an error.
+
 **Context (retrieved documentation):**
 {context}
 

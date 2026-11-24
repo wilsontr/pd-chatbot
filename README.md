@@ -148,29 +148,42 @@ above — the tables and the mean ± std are in [EVAL.md](docs/EVAL.md)):
 
 | | Faithfulness | Relevance | Citation | Cost/query | p50 | p95 |
 |---|---|---|---|---|---|---|
-| Pipeline | 4.71 ± 0.16 | 4.82 ± 0.05 | 4.60 ± 0.03 | $0.0105 | 3.6 s | 5.2 s |
-| Agent | 4.66 ± 0.05 | 4.87 ± 0.00 | 4.50 ± 0.12 | $0.0125 | 5.7 s | 7.8 s |
+| Pipeline | 4.50 ± 0.13 | 4.81 ± 0.05 | 4.49 ± 0.17 | $0.0110 | 3.7 s | 5.5 s |
+| Agent | 4.66 ± 0.21 | 4.88 ± 0.02 | 4.47 ± 0.07 | $0.0124 | 5.8 s | 7.8 s |
 
 The TASK-5.1 parity conclusion **holds** at 30 entries x 3 trials: the paired
-per-trial differences are faithfulness −0.05 ± 0.19, relevance +0.05 ± 0.05 and
-citation −0.10 ± 0.14 (agent − pipeline), and none is larger than its own spread
-(and at least 0.1), so the honest verdict is "matches". What the agent buys is
-retrieval, not answer quality: its own `search_docs` calls beat the pipeline's
-single routed search at 30 entries (recall@5 79.4% vs. 75.0%, recall@10 82.8% vs.
-75.0%, MRR 0.781 vs. 0.696, nDCG@5 0.752 vs. 0.692), and they do it with 1.5 tool
-calls per question, at +2.1 s p50 / +2.6 s p95 latency and +$0.0020 per query.
-The measured dollar cost of that run was **$2.07**. The loop alone does not beat a
-well-tuned pipeline on answer quality; what it buys is the mechanism —
-re-searching, running tools, self-correcting — that the sandbox and skill
-subtasks are measured on.
+per-trial differences are faithfulness +0.16 ± 0.27, relevance +0.07 ± 0.04 and
+citation −0.02 ± 0.13 (agent − pipeline), and none is both larger than its own
+spread and at least 0.1, so the honest verdict is "matches" — the agent is
+nominally ahead on faithfulness and relevance and level on citation. What the
+agent buys is retrieval, not answer quality: its own `search_docs` calls beat
+the pipeline's single routed search at 30 entries (recall@5 79.4% vs. 75.0%,
+recall@10 82.8% vs. 75.0%, MRR 0.749 vs. 0.696, nDCG@5 0.734 vs. 0.692), and they
+do it with 1.5 tool calls per question, at +2.1 s p50 / +2.3 s p95 latency and
++$0.0014 per query. The measured dollar cost of that run was **$2.10**. The loop
+alone does not beat a well-tuned pipeline on answer quality; what it buys is the
+mechanism — re-searching, running tools, self-correcting — that the sandbox and
+skill subtasks are measured on.
 
-Two caveats are measured, not assumed. The judge is unreliable on ordering
-claims: it has scored a self-contradicting `[line~]` list example 5/5/5 and a
-correct left-to-right answer 2, on both arms (see the claim-check section of
-[EVAL.md](docs/EVAL.md)), which is why a deterministic check pins that failure
-mode and single-trial per-entry scores are not quoted. And the agent still adds
-unsupported specifics on a few entries (`[snapshot~]`'s inlets, `[unpack]`'s
-outlet order), which is the known gap TASK-5.7 calibrates thresholds against.
+These numbers are post-correction for the judge's inlet-order belief (TASK-5.22)
+and the agent's object-attribution prompt rules (TASK-5.23), so they are not
+directly comparable to the pre-correction table; the per-arm change from the
+TASK-5.21 baseline is pipeline faithfulness 4.71 → 4.50 and agent 4.66 → 4.66,
+with the pipeline move inside the observed single-entry judge noise (unchanged
+prompts have moved individual entries by up to two points between runs).
+
+Two caveats are measured, not assumed. The judge's ordering belief was wrong in
+both directions — it scored a self-contradicting `[line~]` list example 5/5/5
+and a correct left-to-right answer 2 — so the rubric now states Pd's documented
+inlet/outlet rules and both directions are pinned as control answers
+([`evaluation/judge_controls.py`](evaluation/judge_controls.py)): the reversed
+control scores 1–2, the correct one 5, on every run. Single-trial per-entry
+scores are still not quoted; the citation dimension in particular swings 2 ↔ 5
+for near-identical answers. And the agent still asserts some specifics its
+excerpts do not state: the `[unpack]` outlet-order claim is fixed (warning rate
+2/3 before, 0/5 after the prompt rule), but `[snapshot~]`'s inlet count still
+leaks into pd-patch diagrams, tracked in TASK-5.24 and measured by TASK-5.7's
+calibration.
 
 **Generation metrics**: faithfulness, answer relevance, and citation
 correctness scored by a Claude-as-judge rubric (LLM-as-judge). A sampled run
@@ -205,7 +218,7 @@ threshold.
 
 Citation correctness is gated as a collapse guard: the system prompt requires
 URLs to be copied verbatim from the retrieved excerpts, which lifted the
-30-entry mean from ~4.4 to ~4.6, and the gate catches a prompt that reintroduces
+30-entry mean from ~4.4 to ~4.5-4.6, and the gate catches a prompt that reintroduces
 invented or missing URLs (scores heading toward 3). The 10-entry CI sample is
 too small for a tighter citation bound, so the 30-entry comparison remains the
 precise measurement. Every run states its sample, both models and the measured

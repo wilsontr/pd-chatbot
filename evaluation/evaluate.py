@@ -535,6 +535,11 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
                 f"`{generation_meta['model']}`, scored 1-5 by `{generation_meta['judge']}`."
                 + prompt_note + mode_note + trial_note
             )
+            lines.append(
+                "The judge's Pd inlet/outlet-ordering belief is pinned in both "
+                "directions by control answers in "
+                "[`evaluation/judge_controls.py`](../evaluation/judge_controls.py)."
+            )
             lines.append("")
         trials = generation.get("trials") or 1
         has_agent = any(m.get("mode") == "agent" for m in per_model.values())
@@ -778,8 +783,9 @@ def _claim_check_section(generation: dict) -> list[str]:
         "([`evaluation/claims.py`](../evaluation/claims.py)): a list that fills "
         "inlets right to left, each pinned entry's recorded wrong claim, an object "
         "discussed without an excerpt covering it, and a cited URL no excerpt "
-        "contains. They do not depend on the judge, which has scored a "
-        "self-contradicting answer 5/5/5.",
+        "contains. They do not depend on the judge, whose inlet/outlet-ordering "
+        "belief is itself checked in both directions against recorded answers "
+        "([`evaluation/judge_controls.py`](../evaluation/judge_controls.py)).",
         "",
     ]
     if not grouped:
