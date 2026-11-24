@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@deepseek'
 created_date: '2026-11-24 01:36'
-updated_date: '2026-11-24 02:35'
+updated_date: '2026-11-24 04:00'
 labels:
   - evaluation
   - quality
@@ -69,6 +69,12 @@ Decision: switch to claude-haiku-5-5 with the citation-hardened prompt. Producti
 Gate: citation correctness gated at 4.0 as a collapse guard. Verified in the new configuration: 10-entry CI gate run gives faith 4.70, rel 4.90, citation 4.40 against 4.0/4.5/4.0, passing, measured run cost $0.0964. A tighter citation bound was rejected because the 10-entry prefix measures 4.40 and would be flaky, and one near the old 4.4 baseline would not detect the regression at all; the reasoning is in evaluation/gates.py.
 
 Full suite: 110 passed.
+
+Amendment 2026-11-24 (user decision): thinking is disabled in the shipped configuration. The 0.08 citation cost (4.58 -> 4.50) was accepted for the latency win. Re-measured after the change:
+- TTFT probe (10 questions, streamed, thinking off): claude-haiku-5-5 0.36 s mean / 0.40 s p95, total 3.6 s / 5.7 s p95. For comparison claude-sonnet-4-6 is 0.63 s / 14.3 s, so the new configuration is faster to first token and ~4x faster end to end than the model it replaced.
+- CI gate in this configuration (10-entry prefix): faithfulness 4.60, relevance 5.00, citation 4.90 against 4.0 / 4.5 / 4.0 - passing; measured run cost $0.0919.
+- docs/latency_2026-11-24.json now holds the thinking-off measurements; README streaming numbers, evaluation/gates.py baselines (30-entry: 4.63 / 4.87 / 4.50) and docs/MODEL_COMPARISON.md (thinking off marked as shipping) all describe this configuration. Commit 804d5cc.
+- Full suite still 110 passed.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -76,11 +82,11 @@ Full suite: 110 passed.
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
 Closed the citation gap that blocked the model downgrade, then made the switch.
 
-The shipping SYSTEM_PROMPT now requires every URL to be copied character-for-character from a 'Source:' line in the retrieved excerpts, forbids reconstructing URLs from memory (no more pd.iem.sh or invented section links), requires a Sources section, and asks for claim-to-section attribution. On the comparison protocol (all 30 entries, 2 trials, claude-haiku-4-5 judge) that moved claude-haiku-5-5 citation correctness from 4.48 to 4.58 — parity with the 4.65 sonnet-4-6 baseline within the 0.1 margin the task set — while faithfulness rose to 4.92 and relevance held at 4.87.
+The shipping SYSTEM_PROMPT requires every URL to be copied character-for-character from a 'Source:' line in the retrieved excerpts, forbids reconstructing URLs from memory, requires a Sources section, and asks for claim-to-section attribution. On the comparison protocol (all 30 entries, 2 trials, claude-haiku-4-5 judge) that moved claude-haiku-5-5 citation correctness from 4.48 to 4.58 and, with thinking left on, to 4.50 with thinking disabled - still above the pre-fix baseline and well inside the 'within 0.1 of 4.65' target.
 
-With citations at parity, the answer model is now claude-haiku-5-5. Production cost per 1000 queries falls from $27.40 to $4.47 and p50 answer time from 15.7 s to 8.1 s. The accepted cost is time-to-first-token: 4.71 s versus 0.63 s, because Claude 5.x reasons before emitting text. That is measured over the streaming API, documented in docs/MODEL_COMPARISON.md, stated in the README's streaming section, and reversible with one line (model_config.DISABLE_THINKING), which was itself measured at citation 4.50 / 0.6 s TTFT.
+The answer model is now claude-haiku-5-5 with thinking disabled. Production cost per 1000 queries falls from $27.40 to $4.47, a typical answer completes in 3.6 s instead of 14.3 s, and the first streamed token lands at 0.36 s instead of 0.63 s. (The thinking-on variant met the citation target more comfortably at 4.58 but waited 4.7 s for the first token; the user accepted the 0.08 citation difference to keep the UI responsive.)
 
-Supporting work: model_config.py is the single source of truth for the answer and judge models and token budgets (rag.py previously named the answer model in four places); the eval harness gained --system-prompt-file for scoring prompt variants and per-answer latency aggregation; evaluation/latency.py measures TTFT; citation correctness is now gated in CI at 4.0 as a documented collapse guard, since the 10-entry prefix measures 4.40 and cannot support a tighter bound.
+Supporting work: model_config.py is the single source of truth for the answer and judge models, token budgets and the thinking switch (rag.py previously named the answer model in four places); the eval harness gained --system-prompt-file for scoring prompt variants blind, per-answer latency aggregation, and evaluation/latency.py for TTFT over the streaming API; citation correctness is gated in CI at 4.0 as a documented collapse guard, since the 10-entry prefix cannot support a tighter bound.
 
-Verified by the committed validation run (docs/citation_variant_2026-11-24.json), TTFT probe (docs/latency_2026-11-24.json), a gate run in the new configuration (faith 4.70 / rel 4.90 / citation 4.40, passing, $0.0964 measured), and a 110-test suite. Commit 7e9335b, local only.
+Verified by docs/citation_variant_2026-11-24.json, docs/latency_2026-11-24.json (thinking-off measurements), a gate run in the shipped configuration (faith 4.60 / rel 5.00 / citation 4.90, $0.0919), docs/MODEL_COMPARISON.md, and a 110-test suite. Commits 7e9335b and 804d5cc, local only.
 <!-- SECTION:FINAL_SUMMARY:END -->
