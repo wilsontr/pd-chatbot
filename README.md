@@ -110,6 +110,7 @@ quality and guard against regressions.
 | Hybrid RRF | 75% | 0.70 |
 | Vector-only | 73% | 0.61 |
 | BM25-only | 37% | 0.26 |
+| Agent tool calls | 79% | 0.78 |
 
 Retrieval metrics route each question with the dataset's curated `query_type`
 rather than the live classifier, so the gate measures the retriever instead of
@@ -127,26 +128,49 @@ entry (one model turn per entry, no answer generation).
 **Agent vs pipeline**: the harness runs every model through both arms on the same
 entries with `--mode both` — the pipeline retrieves once and generates; the agent
 chooses its own `search_docs` calls and is judged against the sections it
-retrieved. The report renders a Pipeline vs agent table with the per-dimension
-deltas and the average tool-call count. The CI gate stays on the pipeline arm,
-whose thresholds are calibrated; agent scores are published beside it.
+retrieved. The report renders a Pipeline vs agent table with mean ± standard
+deviation per dimension across trials, the per-dimension deltas, a verdict line
+derived from those deltas, and the average tool-call count. The CI gate stays on
+the pipeline arm, whose thresholds are calibrated; agent scores are published
+beside it.
 
 ```bash
 # pipeline and agent on the same 10 entries, written to the published report
 python -m evaluation.evaluate --generation --mode both --sample 10 --report docs/EVAL.md
+
+# the published comparison: the full 30 entries, 3 trials per arm
+python -m evaluation.evaluate --all --mode both --agent-retrieval --sample 30 \
+  --trials 3 --report docs/EVAL.md
 ```
 
-**Measured so far** (2026-11-24, 10 entries, both arms, 1 trial): the agent's tool
-calls retrieve better than the pipeline's single routed search (MRR 0.753 vs.
-0.696, recall@5 76% vs. 75%), and answer quality is at parity within judge noise
-(faithfulness 4.70 vs. 4.70, relevance 5.00 vs. 4.90, citation 4.90 vs. 5.00) at
-slightly lower generation cost ($0.0087 vs. $0.0097 per query) and +1.7 s p50
-latency. The honest reading is that the loop alone does not beat a well-tuned
-pipeline on answer quality; what it buys is the mechanism — re-searching, running
-tools, and self-correcting — that the sandbox and skill subtasks are measured on.
-The first run before a prompt fix showed the failure mode the eval is for: the
-agent stretched a general "subpatches" section to support a claim about `[unpack]`
-(citation 4.40 vs. 5.00), which a tool-guidance and attribution rule fixed.
+**Measured** (2026-11-24, full 30 entries, both arms, 3 trials, recorded command
+above — the tables and the mean ± std are in [EVAL.md](docs/EVAL.md)):
+
+| | Faithfulness | Relevance | Citation | Cost/query | p50 | p95 |
+|---|---|---|---|---|---|---|
+| Pipeline | 4.71 ± 0.16 | 4.82 ± 0.05 | 4.60 ± 0.03 | $0.0105 | 3.6 s | 5.2 s |
+| Agent | 4.66 ± 0.05 | 4.87 ± 0.00 | 4.50 ± 0.12 | $0.0125 | 5.7 s | 7.8 s |
+
+The TASK-5.1 parity conclusion **holds** at 30 entries x 3 trials: the paired
+per-trial differences are faithfulness −0.05 ± 0.19, relevance +0.05 ± 0.05 and
+citation −0.10 ± 0.14 (agent − pipeline), and none is larger than its own spread
+(and at least 0.1), so the honest verdict is "matches". What the agent buys is
+retrieval, not answer quality: its own `search_docs` calls beat the pipeline's
+single routed search at 30 entries (recall@5 79.4% vs. 75.0%, recall@10 82.8% vs.
+75.0%, MRR 0.781 vs. 0.696, nDCG@5 0.752 vs. 0.692), and they do it with 1.5 tool
+calls per question, at +2.1 s p50 / +2.6 s p95 latency and +$0.0020 per query.
+The measured dollar cost of that run was **$2.07**. The loop alone does not beat a
+well-tuned pipeline on answer quality; what it buys is the mechanism —
+re-searching, running tools, self-correcting — that the sandbox and skill
+subtasks are measured on.
+
+Two caveats are measured, not assumed. The judge is unreliable on ordering
+claims: it has scored a self-contradicting `[line~]` list example 5/5/5 and a
+correct left-to-right answer 2, on both arms (see the claim-check section of
+[EVAL.md](docs/EVAL.md)), which is why a deterministic check pins that failure
+mode and single-trial per-entry scores are not quoted. And the agent still adds
+unsupported specifics on a few entries (`[snapshot~]`'s inlets, `[unpack]`'s
+outlet order), which is the known gap TASK-5.7 calibrates thresholds against.
 
 **Generation metrics**: faithfulness, answer relevance, and citation
 correctness scored by a Claude-as-judge rubric (LLM-as-judge). A sampled run
@@ -176,6 +200,7 @@ threshold.
 | Judge model | `claude-haiku-4-5` (1–5 rubric) |
 | Sample | 10 of 30 golden entries, deterministic prefix |
 | Gate | faithfulness ≥ 4.0, relevance ≥ 4.5, citation ≥ 4.0 (collapse guard) |
+| Deterministic claim checks | 0 errors across both arms (section titles, correct "send them separately" advice and scheme-only URL differences are not errors) |
 | Cost bound | **~$0.19 per PR run** (10 entries x 2 arms: 20 generations, ~60 judge calls and 20 scope classifications at measured rates) |
 
 Citation correctness is gated as a collapse guard: the system prompt requires
@@ -187,6 +212,16 @@ precise measurement. Every run states its sample, both models and the measured
 dollars in the GitHub job summary, so cost is visible rather than assumed.
 Thresholds and their rationale live in
 [`evaluation/gates.py`](evaluation/gates.py).
+
+**Deterministic claim checks** ([`evaluation/claims.py`](evaluation/claims.py))
+run on every scored answer, in both arms, next to the judge. They catch what the
+judge has demonstrably missed or misjudged: a list that fills inlets right to
+left, the recorded wrong claim of a pinned golden entry, an object discussed
+without an excerpt covering it, and a URL no excerpt contains. A violation is
+deterministic, so it fails the gate for either arm — there is nothing to
+calibrate, and repeating the run does not make it go away. A true claim the
+excerpts happen not to state is published as a warning instead, because the
+model makes that one often enough that gating it would make the build flaky.
 
 ```bash
 # same command CI runs, against the first 10 entries

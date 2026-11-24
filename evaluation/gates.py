@@ -35,6 +35,8 @@ from typing import Any, Mapping
 
 from model_config import ANSWER_MODEL, JUDGE_MODEL
 
+from . import claims
+
 # Means on the 1-5 judge scale below which the build fails. 30-entry baselines
 # (2026-11-24) are 4.92 / 4.87 / 4.58; the 10-entry CI prefix measures lower for
 # citation (4.40), which is why that threshold is a floor rather than a tight
@@ -130,6 +132,51 @@ def check_generation_thresholds(
     return failures
 
 
+def check_claim_violations(
+    generation: Mapping[str, Any] | None,
+) -> list[str]:
+    """Return one message per deterministic claim check that fired.
+
+    These are not score thresholds and need no calibration, so they are gated
+    for *every* arm in the run: a list example that contradicts Pd's inlet order,
+    a claimed object behaviour no retrieved excerpt covers, or a URL that is not
+    in the excerpts is wrong in either arm, and it is deterministic — repeating
+    the run does not make it go away the way judge noise does.
+
+    Detail comes from the per-entry records (one per entry per trial); the
+    per-model counts are the fallback for a summary that carries no entries.
+
+    Only ``error``-severity violations fail the gate. A ``warning`` (a true claim
+    the retrieved excerpts do not state) is reported in the eval output, because
+    gating on it would turn a one-in-three model habit into a flaky build.
+    """
+    generation = generation or {}
+    entries = generation.get("entries") or []
+    failures: list[str] = []
+    seen: set[tuple[str, str, str]] = set()
+    for label, items in claims.violations_by_arm(entries).items():
+        for item in items:
+            if item.get("severity") == claims.WARNING:
+                continue
+            key = (label, str(item.get("entry_id")), str(item.get("check")))
+            if key in seen:
+                continue
+            seen.add(key)
+            failures.append(f"{label}: {claims.describe(item)}")
+    if entries:
+        return failures
+
+    for label, model_summary in (generation.get("per_model") or {}).items():
+        count = model_summary.get(
+            "claim_violation_count", model_summary.get("claim_violation_count_avg")
+        )
+        if isinstance(count, (int, float)) and count:
+            failures.append(
+                f"{label}: {count:g} deterministic claim check(s) flagged"
+            )
+    return failures
+
+
 def check_scope_threshold(
     scope_result: Mapping[str, Any] | None,
     threshold: float = SCOPE_ADHERENCE_THRESHOLD,
@@ -156,6 +203,21 @@ def _format_cost(model_summary: Mapping[str, Any]) -> str:
     return "n/a"
 
 
+def _number(model_summary: Mapping[str, Any], *keys: str) -> float:
+    """First numeric value under a single-trial key or its multi-trial ``_avg``."""
+    for key in keys:
+        for name in (key, f"{key}_avg"):
+            value = model_summary.get(name)
+            if isinstance(value, (int, float)):
+                return float(value)
+    return 0.0
+
+
+def _latency_cell(model_summary: Mapping[str, Any], key: str) -> str:
+    value = _number(model_summary, key)
+    return f"{value / 1000:.1f}s" if value else "-"
+
+
 def _format_score(value: Any) -> str:
     return f"{value:.2f}" if isinstance(value, (int, float)) else "-"
 
@@ -178,10 +240,12 @@ def generation_summary_markdown(
     generation = results.get("generation", {}) or {}
     per_model = generation.get("per_model", {}) or {}
     scope_result = results.get("scope") or {}
+    trials = generation.get("trials") or 1
     # No scores at all is a failure: a run that produced nothing must not pass.
     failures = check_generation_thresholds(
         generation, thresholds, include_agent=include_agent
     )
+    claim_failures = check_claim_violations(generation)
 
     lines: list[str] = [
         "## Generation eval (sampled)",
@@ -189,6 +253,7 @@ def generation_summary_markdown(
         f"- **Generation model:** `{model}`",
         f"- **Judge model:** `{judge_model}` (1-5 rubric)",
         f"- **Sample:** {sample_size} golden entries (deterministic prefix)",
+        f"- **Trials:** {trials}" + (" (cells are means across trials)" if trials > 1 else ""),
         f"- **Gate:** "
         + ", ".join(f"{dim} >= {minimum:g}" for dim, minimum in thresholds.items()),
         "",
@@ -196,8 +261,10 @@ def generation_summary_markdown(
 
     if per_model:
         lines += [
-            "| Model | Faithfulness | Relevance | Citation | n | Cost/query |",
-            "|-------|--------------|-----------|----------|---|------------|",
+            "| Model | Faithfulness | Relevance | Citation | n | Cost/query "
+            "| p50 | p95 |",
+            "|-------|--------------|-----------|----------|---|------------|"
+            "-----|-----|",
         ]
         for model_name, m in per_model.items():
             lines.append(
@@ -206,16 +273,19 @@ def generation_summary_markdown(
                 f"| {_format_score(mean_score(m, 'relevance'))} "
                 f"| {_format_score(mean_score(m, 'citation_correctness'))} "
                 f"| {m.get('n', 0)} "
-                f"| {_format_cost(m)} |"
+                f"| {_format_cost(m)} "
+                f"| {_latency_cell(m, 'p50_latency_ms')} "
+                f"| {_latency_cell(m, 'p95_latency_ms')} |"
             )
         lines.append("")
 
         run_cost = sum(
-            m.get("run_total_cost_usd") or 0.0 for m in per_model.values()
-        )
+            _number(m, "run_total_cost_usd") for m in per_model.values()
+        ) * trials
         if run_cost:
+            suffix = f" across {trials} trials" if trials > 1 else ""
             lines.append(
-                f"Measured cost for this run: **${run_cost:.4f}** "
+                f"Measured cost for this run: **${run_cost:.4f}**{suffix} "
                 "(generation + judge tokens; retrieval calls are extra)."
             )
             lines.append("")
@@ -232,10 +302,11 @@ def generation_summary_markdown(
                       f"got {f['predicted']})" for f in scope_result["failures"]]
         lines.append("")
 
-    if failures:
+    if failures or claim_failures:
         lines.append("### Gate: FAILED")
         lines.append("")
         lines += [f"- {message}" for message in failures]
+        lines += [f"- claim check: {message}" for message in claim_failures]
     else:
         lines.append("### Gate: passed")
         if per_model:
@@ -249,5 +320,6 @@ def generation_summary_markdown(
                         f"{_format_score(mean_score(m, dimension))} "
                         f">= {minimum:g}"
                     )
+            lines.append("- deterministic claim checks: 0 flagged (all arms)")
     lines.append("")
     return "\n".join(lines)

@@ -35,6 +35,7 @@ from model_config import (
     thinking_kwargs,
 )
 
+from . import claims
 from .dataset import GoldenDataset, GoldenEntry
 from .judge import evaluate_generation
 from .retry import with_retries
@@ -240,9 +241,17 @@ def run_generation_eval(
         answer: str,
         usage: dict[str, int],
         latency_ms: float,
+        chunks: list[dict[str, Any]] | None = None,
         **extra: Any,
     ) -> None:
         label = labels[(arm, m)]
+        # Deterministic checks travel with the answer, not the judge: an ordering
+        # claim or an invented URL is wrong whether or not the judge notices, and
+        # the judge has scored a self-contradicting answer 5/5/5 (see claims.py).
+        violations = [
+            v.as_dict()
+            for v in claims.check_answer(entry.id, answer, chunks or [])
+        ]
         results[label].append({
             "entry_id": entry.id,
             "model": m,
@@ -252,6 +261,7 @@ def run_generation_eval(
             "scores": scores,
             "usage": usage,
             "latency_ms": round(latency_ms, 1),
+            "claim_violations": violations,
             **extra,
         })
         if verbose:
@@ -301,7 +311,7 @@ def run_generation_eval(
                         usage_sink=judge_usage[label],
                     )
                     record(entry, arm, m, scores, answer, usage, latency_ms,
-                           chunks_retrieved=len(chunks))
+                           chunks=chunks, chunks_retrieved=len(chunks))
             else:
                 for m in models_to_run:
                     label = labels[(arm, m)]
@@ -332,6 +342,7 @@ def run_generation_eval(
                         usage_sink=judge_usage[label],
                     )
                     record(entry, arm, m, scores, answer, usage, latency_ms,
+                           chunks=chunks,
                            chunks_retrieved=len(chunks),
                            tool_calls=result.tool_calls,
                            retrieval_calls=result.retrieval_calls,
@@ -374,6 +385,21 @@ def run_generation_eval(
             model_summary["avg_turns"] = round(
                 sum(e.get("turns", 0) for e in entries_list) / len(entries_list), 2
             )
+
+        # Deterministic claim violations for this arm. Always recorded, so the
+        # report and the gate can say "0 flagged" rather than "not checked".
+        # Errors are gated; warnings are reported only (see evaluation/claims.py).
+        all_violations = [
+            v for e in entries_list for v in (e.get("claim_violations") or [])
+        ]
+        model_summary["claim_violation_count"] = sum(
+            1 for v in all_violations if v.get("severity") != claims.WARNING
+        )
+        warning_count = sum(
+            1 for v in all_violations if v.get("severity") == claims.WARNING
+        )
+        if warning_count:
+            model_summary["claim_warning_count"] = warning_count
 
         usages = [e["usage"] for e in entries_list if e.get("usage")]
         judge_usages = judge_usage.get(label, {})
@@ -440,6 +466,7 @@ def run_generation_eval(
             "model": m["model"],
             "arm": m["arm"],
             "label": m["label"],
+            "answer": m.get("answer"),
             "scores": {
                 dim: {"score": s.get("score"), "explanation": s.get("explanation")}
                 for dim, s in m["scores"].items()
@@ -447,6 +474,7 @@ def run_generation_eval(
             "usage": m.get("usage"),
             "latency_ms": m.get("latency_ms"),
             "chunks_retrieved": m.get("chunks_retrieved"),
+            "claim_violations": m.get("claim_violations") or [],
         }
         for model_results in results.values()
         for m in model_results

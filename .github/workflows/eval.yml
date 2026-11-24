@@ -11,6 +11,10 @@ on:
         description: 'Number of generation samples'
         type: string
         default: '10'
+      trials:
+        description: 'Trials per arm (3 = the published 30-entry baseline; each trial costs money)'
+        type: string
+        default: '1'
 
 # Prevent concurrent eval runs on the same branch from racing each
 # other when auto-committing EVAL.md.  Without this, two pushes in
@@ -22,7 +26,10 @@ concurrency:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A single-trial sampled run finishes in a few minutes; the published
+    # 30-entry x 3-trial baseline (sample=30, trials=3, dispatched manually)
+    # takes ~50 minutes, so the timeout follows the trials input.
+    timeout-minutes: ${{ (github.event.inputs.trials || '1') == '1' && 20 || 120 }}
     permissions:
       contents: write  # needed for auto-commit of EVAL.md
 
@@ -63,12 +70,14 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
           SAMPLE: ${{ github.event.inputs.sample || '10' }}
+          TRIALS: ${{ github.event.inputs.trials || '1' }}
         run: |
           python -m evaluation.evaluate \
             --all \
             --mode both \
             --agent-retrieval \
             --sample "$SAMPLE" \
+            --trials "$TRIALS" \
             --report docs/EVAL.md \
             --gate \
             --summary "$GITHUB_STEP_SUMMARY" \

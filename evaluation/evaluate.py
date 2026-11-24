@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from model_config import ANSWER_MODEL, JUDGE_MODEL
+from . import claims
 from .dataset import GoldenDataset
 from .retrieval import run_retrieval_eval
 from .generation import EVAL_MODES, run_generation_eval
@@ -37,6 +38,7 @@ from .scope_eval import run_scope_eval
 from .gates import (
     GENERATION_THRESHOLDS,
     SCOPE_ADHERENCE_THRESHOLD,
+    check_claim_violations,
     check_scope_threshold,
     check_generation_thresholds,
     generation_summary_markdown,
@@ -61,6 +63,11 @@ def _aggregate_trials(trial_summaries: list[dict]) -> dict[str, Any]:
     same model can score noticeably differently between runs (observed directly
     earlier in this project), so a single-trial comparison can overstate how
     confident a "model A beats model B" conclusion really is.
+
+    Non-numeric fields (``mode``) are carried over from the first trial: the
+    report and the gate dispatch on ``mode`` to tell the agent arm from the
+    pipeline arm, so dropping it silently loses the agent columns and the
+    Pipeline-vs-agent table on a multi-trial run.
     """
     model_names = trial_summaries[0]["per_model"].keys()
     per_model: dict[str, Any] = {}
@@ -76,9 +83,22 @@ def _aggregate_trials(trial_summaries: list[dict]) -> dict[str, Any]:
                 if isinstance(t["per_model"].get(m_name, {}).get(key), (int, float))
             ]
             if not values:
+                carried = [
+                    t["per_model"].get(m_name, {}).get(key) for t in trial_summaries
+                ]
+                carried = [value for value in carried if value is not None]
+                if carried:
+                    merged[key] = carried[0]
                 continue
             if key == "n":
-                merged["n"] = values[0]
+                # A trial that skipped an entry (no chunks retrieved) scores one
+                # fewer entry; report the mean rather than the first trial's count.
+                merged["n"] = (
+                    values[0]
+                    if len(set(values)) == 1
+                    else round(sum(values) / len(values))
+                )
+                merged["n_by_trial"] = values
                 continue
             merged[f"{key}_by_trial"] = values
             merged[f"{key}_avg"] = round(sum(values) / len(values), 4)
@@ -86,9 +106,18 @@ def _aggregate_trials(trial_summaries: list[dict]) -> dict[str, Any]:
                 merged[f"{key}_std"] = round(statistics.stdev(values), 4)
         per_model[m_name] = merged
 
+    # Flatten the per-entry records so the report and the claim gate keep their
+    # per-entry detail (a violation, a low-scoring entry) on a multi-trial run.
+    entries: list[dict[str, Any]] = [
+        {**entry, "trial": index + 1}
+        for index, summary in enumerate(trial_summaries)
+        for entry in (summary.get("entries") or [])
+    ]
+
     return {
         "trials": len(trial_summaries),
         "per_model": per_model,
+        "entries": entries,
         "raw_trials": trial_summaries,
     }
 
@@ -176,7 +205,8 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument(
         "--gate", action="store_true",
         help="Exit non-zero when a generation mean falls below the documented "
-             "threshold (faithfulness/relevance, see evaluation/gates.py)"
+             "threshold, or when a deterministic claim check fires "
+             "(see evaluation/gates.py and evaluation/claims.py)"
     )
     parser.add_argument(
         "--quiet", action="store_true",
@@ -268,6 +298,7 @@ def main(argv: list[str] | None = None) -> dict:
             "sample": args.sample or len(dataset),
             "prompt": args.system_prompt_file or "default",
             "mode": args.mode,
+            "trials": args.trials,
         }
 
     if args.report:
@@ -300,10 +331,13 @@ def main(argv: list[str] | None = None) -> dict:
             results["generation"], include_agent=args.gate_agent
         )
         failures += check_scope_threshold(results.get("scope"))
-        if failures:
+        claim_failures = check_claim_violations(results["generation"])
+        if failures or claim_failures:
             print("\nGeneration gate FAILED:", file=sys.stderr)
             for failure in failures:
                 print(f"  - {failure}", file=sys.stderr)
+            for failure in claim_failures:
+                print(f"  - claim check: {failure}", file=sys.stderr)
             print(
                 "Thresholds: "
                 + ", ".join(
@@ -325,8 +359,63 @@ def main(argv: list[str] | None = None) -> dict:
     return exit_code
 
 
-def _format_metric(value: float | None) -> str:
-    return f"{value:.2f}" if value is not None else "-"
+def _metric(model_summary: dict, *keys: str) -> float | None:
+    """First numeric value under a single-trial key or its multi-trial ``_avg``."""
+    for key in keys:
+        for name in (key, f"{key}_avg"):
+            value = model_summary.get(name)
+            if isinstance(value, (int, float)):
+                return float(value)
+    return None
+
+
+def _spread(model_summary: dict, key: str) -> float | None:
+    """Standard deviation across trials for a merged numeric field, if any."""
+    value = model_summary.get(f"{key}_std")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _score_cell(model_summary: dict, dimension: str) -> str:
+    mean = mean_score(model_summary, dimension)
+    if mean is None:
+        return "-"
+    std = _spread(model_summary, f"{dimension}_mean")
+    return f"{mean:.2f} ± {std:.2f}" if std is not None else f"{mean:.2f}"
+
+
+def _cost_cell(model_summary: dict) -> str:
+    value = _metric(model_summary, "avg_total_cost_usd")
+    return f"${value:.4f}" if value is not None else "-"
+
+
+def _seconds_cell(model_summary: dict, key: str) -> str:
+    value = _metric(model_summary, key)
+    return f"{value / 1000:.1f}s" if value is not None else "-"
+
+
+def _tool_cell(model_summary: dict) -> str:
+    value = _metric(model_summary, "avg_tool_calls")
+    if value is None:
+        return "0"
+    return str(int(value)) if float(value).is_integer() else f"{value:.2f}"
+
+
+def _cost_total_lines(per_model: dict, trials: int) -> list[str]:
+    """The measured dollar cost of the run, next to the per-query cost."""
+    per_trial = sum(
+        _metric(mdata, "run_total_cost_usd") or 0.0 for mdata in per_model.values()
+    )
+    if not per_trial:
+        return []
+    total = per_trial * trials
+    arms = len(per_model)
+    suffix = f" across {trials} trials" if trials > 1 else ""
+    return [
+        f"- **Measured cost:** ${total:.4f} for this run{suffix} "
+        f"({arms} arm{'s' if arms != 1 else ''}: generation + judge tokens; "
+        "retrieval embedding calls are extra).",
+        "",
+    ]
 
 
 def _percent_change(old: float, new: float) -> str:
@@ -360,8 +449,8 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
     if retrieval:
         lines.append("## Retrieval")
         lines.append("")
-        lines.append("| Strategy | recall@3 | recall@5 | recall@10 | MRR | nDCG@5 |")
-        lines.append("|----------|----------|----------|-----------|-----|--------|")
+        lines.append("| Strategy | recall@3 | recall@5 | recall@10 | MRR | nDCG@5 | nDCG@10 |")
+        lines.append("|----------|----------|----------|-----------|-----|--------|---------|")
 
         strategies = ["hybrid_rrf"]
         if retrieval.get("ablation"):
@@ -383,7 +472,8 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
                 f"| {recall.get('recall@5', 0):.2%} "
                 f"| {recall.get('recall@10', 0):.2%} "
                 f"| {data.get('mrr', 0):.3f} "
-                f"| {ndcg.get('ndcg@5', 0):.3f} |"
+                f"| {ndcg.get('ndcg@5', 0):.3f} "
+                f"| {ndcg.get('ndcg@10', 0):.3f} |"
             )
             lines.append(line)
             if name == "hybrid_rrf":
@@ -433,47 +523,49 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
                 "both": " Both arms ran on every entry (pipeline and agent).",
                 "agent": " Agent arm only: retrieval is a tool the model calls.",
             }.get(mode, "")
+            trials = generation.get("trials") or generation_meta.get("trials") or 1
+            trial_note = (
+                f" {trials} trials per arm; cells are the mean ± the standard "
+                "deviation across trials."
+                if trials > 1
+                else ""
+            )
             lines.append(
                 f"Sampled eval: {generation_meta['sample']} entries generated by "
                 f"`{generation_meta['model']}`, scored 1-5 by `{generation_meta['judge']}`."
-                + prompt_note + mode_note
+                + prompt_note + mode_note + trial_note
             )
             lines.append("")
+        trials = generation.get("trials") or 1
         has_agent = any(m.get("mode") == "agent" for m in per_model.values())
-        header = "| Model | Faithfulness | Relevance | Citation | n | Cost/query | p50 latency |"
-        divider = "|-------|-------------|-----------|----------|---|------------|-------------|"
+        header = ("| Model | Faithfulness | Relevance | Citation | n | Cost/query "
+                  "| p50 latency | p95 latency |")
+        divider = ("|-------|-------------|-----------|----------|---|------------|"
+                   "-------------|-------------|")
         if has_agent:
             header += " Tool calls |"
             divider += "-----------|"
         lines.append(header)
         lines.append(divider)
         for model_name, mdata in per_model.items():
-            f = _format_metric(mean_score(mdata, "faithfulness"))
-            r = _format_metric(mean_score(mdata, "relevance"))
-            c = _format_metric(mean_score(mdata, "citation_correctness"))
-            n = mdata.get("n", 0)
-            cost = mdata.get("avg_total_cost_usd")
-            if cost is None:
-                cost = mdata.get("avg_total_cost_usd_avg")
-            cost_cell = f"${cost:.4f}" if isinstance(cost, (int, float)) else "-"
-            p50 = mdata.get("p50_latency_ms")
-            p50 = p50 if isinstance(p50, (int, float)) else None
-            if p50 is None:
-                p50 = mdata.get("p50_latency_ms_avg")
-            p50_cell = f"{p50 / 1000:.1f}s" if isinstance(p50, (int, float)) else "-"
             row = (
-                f"| {model_name} | {f} | {r} | {c} | {n} | {cost_cell} | {p50_cell} |"
+                f"| {model_name} | {_score_cell(mdata, 'faithfulness')} "
+                f"| {_score_cell(mdata, 'relevance')} "
+                f"| {_score_cell(mdata, 'citation_correctness')} "
+                f"| {mdata.get('n', 0)} | {_cost_cell(mdata)} "
+                f"| {_seconds_cell(mdata, 'p50_latency_ms')} "
+                f"| {_seconds_cell(mdata, 'p95_latency_ms')} |"
             )
             if has_agent:
-                tool_calls = mdata.get("avg_tool_calls")
-                tool_calls = mdata.get("avg_tool_calls_avg", tool_calls)
-                row += f" {tool_calls if isinstance(tool_calls, (int, float)) else '-'} |"
+                row += f" {_tool_cell(mdata)} |"
             lines.append(row)
         lines.append("")
+        lines.extend(_cost_total_lines(per_model, trials))
 
         comparison = _agent_comparison(per_model)
         if comparison:
             lines.extend(comparison)
+        lines.extend(_claim_check_section(generation))
 
     scope_result = results.get("scope") or {}
     if scope_result.get("n"):
@@ -506,7 +598,8 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             "Citation correctness is gated: the prompt requires URLs copied "
             "verbatim from the excerpts, so invented URLs fail the build. "
             "The gate is enforced on the pipeline arm; agent-arm scores are "
-            "reported alongside it (`--gate-agent` gates them too).*"
+            "reported alongside it (`--gate-agent` gates them too). "
+            "Deterministic claim checks fail the gate for every arm.*"
         )
 
     return "\n".join(lines) + "\n"
@@ -526,68 +619,182 @@ def _agent_comparison(per_model: dict) -> list[str]:
     if not pairs:
         return []
 
-    def num(mdata: dict, *keys: str):
-        for key in keys:
-            value = mdata.get(key)
-            if isinstance(value, (int, float)):
-                return value
-        return None
-
-    def score(mdata: dict, dim: str) -> str:
-        value = mean_score(mdata, dim)
-        return f"{value:.2f}" if value is not None else "-"
-
-    def cost(mdata: dict) -> str:
-        value = num(mdata, "avg_total_cost_usd", "avg_total_cost_usd_avg")
-        return f"${value:.4f}" if value is not None else "-"
-
-    def p50(mdata: dict) -> str:
-        value = num(mdata, "p50_latency_ms", "p50_latency_ms_avg")
-        return f"{value / 1000:.1f}s" if value is not None else "-"
-
-    def tools(mdata: dict) -> str:
-        value = num(mdata, "avg_tool_calls", "avg_tool_calls_avg")
-        return f"{value:g}" if value is not None else "0"
-
     lines = [
         "### Pipeline vs agent",
         "",
         "Same entries, same judge, same 1-5 rubric. The agent arm decides its own "
         "`search_docs` calls; the pipeline arm retrieves once and generates.",
         "",
-        "| Arm | Faithfulness | Relevance | Citation | n | Cost/query | p50 latency | Tool calls |",
-        "|-----|--------------|-----------|----------|---|------------|-------------|-----------|",
+        "| Arm | Faithfulness | Relevance | Citation | n | Cost/query | p50 latency "
+        "| p95 latency | Tool calls |",
+        "|-----|--------------|-----------|----------|---|------------|-------------|"
+        "-------------|-----------|",
     ]
     for base_label, base, agent_label, agent in pairs:
         for label, mdata in ((f"{base_label} (pipeline)", base), (agent_label, agent)):
             lines.append(
-                f"| {label} | {score(mdata, 'faithfulness')} "
-                f"| {score(mdata, 'relevance')} "
-                f"| {score(mdata, 'citation_correctness')} "
-                f"| {mdata.get('n', 0)} | {cost(mdata)} | {p50(mdata)} "
-                f"| {tools(mdata)} |"
+                f"| {label} | {_score_cell(mdata, 'faithfulness')} "
+                f"| {_score_cell(mdata, 'relevance')} "
+                f"| {_score_cell(mdata, 'citation_correctness')} "
+                f"| {mdata.get('n', 0)} | {_cost_cell(mdata)} "
+                f"| {_seconds_cell(mdata, 'p50_latency_ms')} "
+                f"| {_seconds_cell(mdata, 'p95_latency_ms')} "
+                f"| {_tool_cell(mdata)} |"
             )
     lines.append("")
     for base_label, base, agent_label, agent in pairs:
-        deltas = []
-        for dim, human in (
-            ("faithfulness", "faithfulness"),
-            ("relevance", "relevance"),
-            ("citation_correctness", "citation"),
-        ):
-            b, a = mean_score(base, dim), mean_score(agent, dim)
-            if b is not None and a is not None:
-                deltas.append(f"{human} {a - b:+.2f}")
-        if deltas:
-            skipped = agent.get("skipped_no_context")
-            skipped_note = (
-                f"; {skipped} entr{'y' if skipped == 1 else 'ies'} skipped with no chunks"
-                if skipped else ""
+        lines.extend(_parity_reading(base_label, base, agent))
+    lines.append("")
+    return lines
+
+
+#: A per-dimension difference below this is not meaningful on a 1-5, integer-
+#: scored rubric even when it happens to be larger than the trial spread.
+_MIN_MEANINGFUL_DELTA = 0.1
+
+
+def _paired_delta(
+    base: dict, agent: dict, dimension: str
+) -> tuple[float, float | None, list[float]] | None:
+    """Agent-minus-pipeline difference for one dimension.
+
+    Repeated trials give one delta per trial; the mean and the standard deviation
+    of those deltas are what the report publishes, because a delta with no spread
+    next to it is a single-sample claim.
+    """
+    key = f"{dimension}_mean"
+    base_trials = base.get(f"{key}_by_trial")
+    agent_trials = agent.get(f"{key}_by_trial")
+    if (
+        isinstance(base_trials, list)
+        and isinstance(agent_trials, list)
+        and len(base_trials) == len(agent_trials)
+        and len(base_trials) > 1
+    ):
+        deltas = [round(a - b, 4) for b, a in zip(base_trials, agent_trials)]
+        mean = sum(deltas) / len(deltas)
+        return mean, statistics.stdev(deltas), deltas
+    base_mean = mean_score(base, dimension)
+    agent_mean = mean_score(agent, dimension)
+    if base_mean is None or agent_mean is None:
+        return None
+    return agent_mean - base_mean, None, []
+
+
+def _parity_reading(base_label: str, base: dict, agent: dict) -> list[str]:
+    """The delta line plus a verdict, derived from the numbers rather than typed.
+
+    The verdict is deliberately conservative: a dimension counts as resolved only
+    when the mean difference is at least 0.1 *and* larger than its own spread
+    across trials. Otherwise the honest statement is that the difference is not
+    resolvable at this sample size.
+    """
+    readings: list[tuple[str, float, float | None]] = []
+    for dimension, human in (
+        ("faithfulness", "faithfulness"),
+        ("relevance", "relevance"),
+        ("citation_correctness", "citation"),
+    ):
+        paired = _paired_delta(base, agent, dimension)
+        if paired is None:
+            continue
+        mean, std, _deltas = paired
+        readings.append((human, mean, std))
+    if not readings:
+        return []
+
+    deltas_text = ", ".join(
+        f"{human} {mean:+.2f}" + (f" ± {std:.2f}" if std is not None else "")
+        for human, mean, std in readings
+    )
+    resolved = [
+        (human, mean)
+        for human, mean, std in readings
+        if abs(mean) >= _MIN_MEANINGFUL_DELTA and (std is None or abs(mean) > std)
+    ]
+    if not resolved:
+        verdict = (
+            "the agent matches the pipeline on every scored dimension — no "
+            "difference is both larger than the trial-to-trial spread and at "
+            "least 0.1 on the 1-5 scale"
+        )
+    elif all(mean > 0 for _human, mean in resolved):
+        verdict = "the agent beats the pipeline on " + ", ".join(
+            human for human, _ in resolved
+        )
+    elif all(mean < 0 for _human, mean in resolved):
+        verdict = "the agent trails the pipeline on " + ", ".join(
+            human for human, _ in resolved
+        )
+    else:
+        verdict = "the agent is mixed against the pipeline (" + ", ".join(
+            f"{human} {mean:+.2f}" for human, mean in resolved
+        ) + ")"
+
+    spread_note = (
+        "Standard deviations are of the per-trial differences; a difference is "
+        "called real only when it exceeds both its own spread and 0.1."
+        if any(std is not None for _human, _mean, std in readings)
+        else ""
+    )
+    skipped = _metric(agent, "skipped_no_context")
+    skipped_note = (
+        f"; {int(skipped)} entr{'y' if skipped == 1 else 'ies'} skipped with no chunks"
+        if skipped else ""
+    )
+    lines = [
+        f"- **{base_label}**: {deltas_text} (agent \u2212 pipeline){skipped_note}.",
+        f"- **Reading:** {verdict}. {spread_note}".rstrip(),
+    ]
+    return lines
+
+
+def _claim_check_section(generation: dict) -> list[str]:
+    """Deterministic claim checks: what the judge cannot be relied on to catch."""
+    entries = generation.get("entries") or []
+    if not entries:
+        return []
+    grouped: dict[str, list[dict]] = {}
+    seen: set[tuple] = set()
+    for entry in entries:
+        label = str(entry.get("label") or "?")
+        for violation in entry.get("claim_violations") or []:
+            key = (
+                label,
+                violation.get("entry_id"),
+                violation.get("check"),
+                violation.get("evidence"),
             )
-            lines.append(
-                f"- **{base_label}**: " + ", ".join(deltas)
-                + f" (agent \u2212 pipeline){skipped_note}."
-            )
+            if key in seen:
+                continue
+            seen.add(key)
+            grouped.setdefault(label, []).append(dict(violation))
+
+    scored = len({(e.get("label"), e.get("id")) for e in entries})
+    lines = [
+        "### Deterministic claim checks",
+        "",
+        "Offline checks run on every scored answer "
+        "([`evaluation/claims.py`](../evaluation/claims.py)): a list that fills "
+        "inlets right to left, each pinned entry's recorded wrong claim, an object "
+        "discussed without an excerpt covering it, and a cited URL no excerpt "
+        "contains. They do not depend on the judge, which has scored a "
+        "self-contradicting answer 5/5/5.",
+        "",
+    ]
+    if not grouped:
+        lines.append(f"- **0 flagged** across {scored} scored answers.")
+    else:
+        everything = [item for items in grouped.values() for item in items]
+        errors = sum(1 for item in everything if item.get("severity") != claims.WARNING)
+        warnings = len(everything) - errors
+        counted = f"{errors} error(s), {warnings} warning(s)"
+        lines.append(f"- **{len(everything)} flagged** across {scored} scored answers "
+                     f"({counted}; errors fail the gate, warnings are published only):")
+        for label, items in grouped.items():
+            for item in items:
+                marker = " ⚠" if item.get("severity") == claims.WARNING else ""
+                lines.append(f"  - `{label}`{marker} {claims.describe(item)}")
     lines.append("")
     return lines
 
@@ -601,7 +808,8 @@ def _format_scores_table(retrieval_result: dict) -> str:
     if retrieval_result.get("agent_tool"):
         strategies.append("agent_tool")
 
-    header = f"{'Strategy':<16} {'recall@3':>10} {'recall@5':>10} {'recall@10':>10} {'MRR':>8} {'ndcg@5':>8}"
+    header = (f"{'Strategy':<16} {'recall@3':>10} {'recall@5':>10} {'recall@10':>10} "
+              f"{'MRR':>8} {'ndcg@5':>8} {'ndcg@10':>8}")
     lines.append(header)
     lines.append("-" * len(header))
 
@@ -618,7 +826,8 @@ def _format_scores_table(retrieval_result: dict) -> str:
             f"{recall.get('recall@5', 0):>10.4f} "
             f"{recall.get('recall@10', 0):>10.4f} "
             f"{data.get('mrr', 0):>8.4f} "
-            f"{ndcg.get('ndcg@5', 0):>8.4f}"
+            f"{ndcg.get('ndcg@5', 0):>8.4f} "
+            f"{ndcg.get('ndcg@10', 0):>8.4f}"
         )
         lines.append(line)
 
