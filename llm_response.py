@@ -10,8 +10,9 @@ those models — it only works while the first block happens to be text. This
 helper concatenates the text blocks and ignores the rest, so the same code path
 works for plain models (one text block) and thinking models (thinking + text).
 
-Deliberately dependency-free: both the production pipeline (rag.py) and the
-evaluation harness (evaluation/generation.py, evaluation/judge.py) use it.
+Deliberately dependency-free: the agent core (agent/loop.py, via the streaming
+client), the pipeline baseline (rag.py) and the evaluation harness
+(evaluation/generation.py, evaluation/judge.py) all use it.
 """
 
 from __future__ import annotations

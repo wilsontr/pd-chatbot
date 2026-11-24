@@ -1,9 +1,11 @@
 """Scope gate: which questions the assistant is willing to answer.
 
-The pipeline uses the classification call it already makes once per query (see
-``rag.classify_query``) to label scope, then this module decides what to do with
-that label. Keeping the decision here — instead of inline in rag.py — makes it
-testable without a model call and keeps the refusal copy in one place.
+Every request makes one classification call (see
+``agent.classification.classify_query``) that labels scope, then this module
+decides what to do with that label. The agent core runs the same gate before its
+loop, because refusing is a policy decision rather than a tool the model may
+skip. Keeping the decision here — instead of inline in the request path — makes
+it testable without a model call and keeps the refusal copy in one place.
 
 Labels come from the classifier:
   in_scope         — Pure Data: objects, patching, audio technique, documentation

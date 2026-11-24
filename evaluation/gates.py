@@ -75,14 +75,27 @@ def mean_score(model_summary: Mapping[str, Any], dimension: str) -> float | None
     return None
 
 
+def is_agent_arm(model_name: str, model_summary: Mapping[str, Any]) -> bool:
+    """True for an agent-arm row in a pipeline-vs-agent comparison.
+
+    The thresholds were calibrated on the fixed pipeline; the agent arm is
+    reported next to it, not gated by it, until its own baseline is measured
+    (TASK-5.7).
+    """
+    return model_summary.get("mode") == "agent" or model_name.endswith(" (agent)")
+
+
 def check_generation_thresholds(
     generation: Mapping[str, Any] | None,
     thresholds: Mapping[str, float] | None = None,
+    *,
+    include_agent: bool = False,
 ) -> list[str]:
     """Return one message per gated dimension that is missing or below threshold.
 
     An empty list means the gate passed. ``generation`` is the dict returned by
-    ``run_generation_eval`` (``{"per_model": {model: {...}}}``).
+    ``run_generation_eval`` (``{"per_model": {model: {...}}}``). Agent-arm rows
+    are skipped unless ``include_agent`` is set.
     """
     thresholds = GENERATION_THRESHOLDS if thresholds is None else thresholds
     per_model = (generation or {}).get("per_model", {}) or {}
@@ -90,7 +103,11 @@ def check_generation_thresholds(
         return ["no generation scores were produced (is the sample empty?)"]
 
     failures: list[str] = []
+    gated_any = False
     for model_name, model_summary in per_model.items():
+        if not include_agent and is_agent_arm(model_name, model_summary):
+            continue
+        gated_any = True
         if not model_summary.get("n"):
             failures.append(f"{model_name}: no entries were scored")
             continue
@@ -105,6 +122,11 @@ def check_generation_thresholds(
                 failures.append(
                     f"{model_name}: {dimension} {score:.2f} < {minimum:.2f} threshold"
                 )
+    if not gated_any:
+        return [
+            "no pipeline-generation scores were produced — the gate is calibrated "
+            "on the pipeline arm; re-run with --mode pipeline or --mode both"
+        ]
     return failures
 
 
@@ -145,6 +167,7 @@ def generation_summary_markdown(
     model: str = CI_MODEL,
     judge_model: str = CI_JUDGE_MODEL,
     thresholds: Mapping[str, float] | None = None,
+    include_agent: bool = False,
 ) -> str:
     """Build the job-summary markdown for a sampled generation run.
 
@@ -156,7 +179,9 @@ def generation_summary_markdown(
     per_model = generation.get("per_model", {}) or {}
     scope_result = results.get("scope") or {}
     # No scores at all is a failure: a run that produced nothing must not pass.
-    failures = check_generation_thresholds(generation, thresholds)
+    failures = check_generation_thresholds(
+        generation, thresholds, include_agent=include_agent
+    )
 
     lines: list[str] = [
         "## Generation eval (sampled)",
@@ -216,6 +241,8 @@ def generation_summary_markdown(
         if per_model:
             lines.append("")
             for model_name, m in per_model.items():
+                if is_agent_arm(model_name, m):
+                    continue
                 for dimension, minimum in thresholds.items():
                     lines.append(
                         f"- {model_name}: {dimension} "

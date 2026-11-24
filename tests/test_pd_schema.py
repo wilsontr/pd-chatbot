@@ -4,7 +4,11 @@ import json
 
 import pytest
 from pd_schema import PdPatch, PdObject, PdConnection
-from rag import _extract_pd_patches, _validate_patch, _validate_and_canonicalize_blocks
+from agent.patches import (
+    extract_pd_patches,
+    validate_and_canonicalize_blocks,
+    validate_patch,
+)
 
 _VALID_PATCH_JSON = json.dumps(
     {
@@ -54,21 +58,21 @@ class TestPdPatchSchema:
 
 class TestValidatePatch:
     def test_valid_patch(self):
-        result = _validate_patch(_VALID_PATCH_JSON)
+        result = validate_patch(_VALID_PATCH_JSON)
         assert result is not None
         assert len(result.objects) == 2
 
     def test_malformed_json_returns_none(self):
-        assert _validate_patch("{not json}") is None
+        assert validate_patch("{not json}") is None
 
     def test_wrong_schema_returns_none(self):
-        assert _validate_patch('{"wrong": "schema"}') is None
+        assert validate_patch('{"wrong": "schema"}') is None
 
 
 class TestExtractPdPatches:
     def test_single_block(self):
         text = f"Here is a patch:\n\n```pd-patch\n{_VALID_PATCH_JSON}\n```\n\nEnd."
-        patches = _extract_pd_patches(text)
+        patches = extract_pd_patches(text)
         assert len(patches) == 1
         raw, block = patches[0]
         assert "osc~" in raw
@@ -76,36 +80,36 @@ class TestExtractPdPatches:
 
     def test_multiple_blocks(self):
         text = f"First:\n```pd-patch\n{_VALID_PATCH_JSON}\n```\nSecond:\n```pd-patch\n{_VALID_PATCH_JSON}\n```"
-        patches = _extract_pd_patches(text)
+        patches = extract_pd_patches(text)
         assert len(patches) == 2
 
     def test_no_blocks(self):
-        assert _extract_pd_patches("No patch here.") == []
+        assert extract_pd_patches("No patch here.") == []
 
     def test_does_not_match_other_languages(self):
         text = "```pd-patch\n[1,2,3]\n```\n```python\nprint(1)\n```"
-        patches = _extract_pd_patches(text)
+        patches = extract_pd_patches(text)
         assert len(patches) == 1
 
 
 class TestValidateAndCanonicalizeBlocks:
     def test_valid_block_kept(self):
         text = f"```pd-patch\n{_VALID_PATCH_JSON}\n```"
-        result, failed = _validate_and_canonicalize_blocks(text)
+        result, failed = validate_and_canonicalize_blocks(text)
         assert not failed
         assert "```pd-patch" in result
         assert "osc~" in result
 
     def test_invalid_block_replaced(self):
         text = "```pd-patch\n{not json}\n```"
-        result, failed = _validate_and_canonicalize_blocks(text)
+        result, failed = validate_and_canonicalize_blocks(text)
         assert failed
         assert "[patch diagram]" in result
         assert "{not json}" not in result
 
     def test_mixed_blocks(self):
         text = f"Good:\n```pd-patch\n{_VALID_PATCH_JSON}\n```\nBad:\n```pd-patch\n{{broken}}\n```"
-        result, failed = _validate_and_canonicalize_blocks(text)
+        result, failed = validate_and_canonicalize_blocks(text)
         assert failed
         assert "osc~" in result
         assert "[patch diagram]" in result
@@ -113,14 +117,14 @@ class TestValidateAndCanonicalizeBlocks:
 
     def test_no_patch_blocks_noop(self):
         text = "Just prose, no patches."
-        result, failed = _validate_and_canonicalize_blocks(text)
+        result, failed = validate_and_canonicalize_blocks(text)
         assert not failed
         assert result == text
 
     def test_canonicalizes_valid_json(self):
         # Input with extra whitespace gets canonicalized
         text = '```pd-patch\n{"objects":  [{"id":"0","type":"obj","text":"x","inlets":1,"outlets":1}], "connections":[]}\n```'
-        result, failed = _validate_and_canonicalize_blocks(text)
+        result, failed = validate_and_canonicalize_blocks(text)
         assert not failed
         # Should be compact now
         assert '"id":"0"' in result

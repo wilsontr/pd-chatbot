@@ -13,7 +13,13 @@ import cachetools
 import pytest
 from fastapi.testclient import TestClient
 
-from feedback_store import FeedbackStore, UnknownMessageError, _normalize_url, metadata
+from agent import events
+from feedback_store import (
+    FeedbackStore,
+    UnknownMessageError,
+    _normalize_url,
+    metadata,
+)
 
 API_KEY = "test-key"
 
@@ -86,27 +92,47 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'api.db'}")
 
     async def fake_stream(question, history):
-        yield {"type": "meta", "sources": [{"heading_path": "osc~"}], "query_type": "object_reference"}
-        yield {"type": "chunk", "text": "A sine "}
-        yield {"type": "chunk", "text": "oscillator."}
-        yield {"type": "done", "history": []}
+        yield events.ToolCall(id="c1", name="search_docs", arguments={"query": "osc~"})
+        yield events.ToolResult(
+            id="c1", name="search_docs", ok=True, summary="1 section for 'osc~'"
+        )
+        yield events.Sources(
+            items=({"heading_path": "osc~"},), query_type="object_reference"
+        )
+        yield events.TextDelta("A sine ")
+        yield events.TextDelta("oscillator.")
+        yield events.Artifact(
+            kind="pd_patch", data={"patch": {"objects": [], "connections": []}}
+        )
+        yield events.Done(
+            answer="A sine oscillator.",
+            new_history=[],
+            query_type="object_reference",
+            turns=2,
+            tool_calls=1,
+        )
 
-    # Stub out rag so these tests need neither the Chroma index nor API keys.
-    fake_rag = types.ModuleType("rag")
-    fake_rag._response_cache = cachetools.TTLCache(maxsize=8, ttl=3600)
-    fake_rag.async_stream_chat = fake_stream
-    fake_rag._langfuse = None
-    monkeypatch.setitem(sys.modules, "rag", fake_rag)
+    # Stub the agent's request orchestration so these tests need neither the
+    # Chroma index nor API keys; the event types and the cache stay real.
+    fake_chat = types.ModuleType("agent.chat")
+    fake_chat.stream_chat = fake_stream
+    monkeypatch.setitem(sys.modules, "agent.chat", fake_chat)
     monkeypatch.delitem(sys.modules, "main", raising=False)
     main = importlib.import_module("main")
     yield TestClient(main.app), main
     sys.modules.pop("main", None)
 
 
+def _frames(resp) -> list[dict]:
+    return [
+        json.loads(line[6:]) for line in resp.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
 def _ask(test_client, question: str) -> str:
     resp = test_client.post("/chat", json={"message": question}, headers={"X-API-Key": API_KEY})
-    events = [json.loads(line[6:]) for line in resp.text.splitlines() if line.startswith("data: ")]
-    return events[-1]["message_id"]
+    return _frames(resp)[-1]["message_id"]
 
 
 class TestFeedbackEndpoint:
@@ -135,3 +161,26 @@ class TestFeedbackEndpoint:
         test_client, _ = client
         r = test_client.post("/feedback", json=_sign("missing", "up"), headers={"X-API-Key": API_KEY})
         assert r.status_code == 404
+
+
+class TestAgentEventFrames:
+    def test_sse_frames_follow_the_typed_event_stream(self, client):
+        """The adapter keeps the meta/chunk/done contract and forwards agent steps."""
+        test_client, _ = client
+        resp = test_client.post(
+            "/chat", json={"message": "What is osc~?"}, headers={"X-API-Key": API_KEY}
+        )
+        frames = _frames(resp)
+        types = [frame["type"] for frame in frames]
+
+        assert types[0] == "tool_call"
+        assert types[1] == "tool_result"
+        meta_index = types.index("meta")
+        first_chunk = types.index("chunk")
+        assert meta_index < first_chunk, "the browser needs meta before the first chunk"
+        assert frames[meta_index]["sources"] == [{"heading_path": "osc~"}]
+        assert frames[meta_index]["query_type"] == "object_reference"
+        assert "artifact" in types
+        assert types[-1] == "done"
+        assert frames[-1]["message_id"]
+        assert frames[-1]["turns"] == 2

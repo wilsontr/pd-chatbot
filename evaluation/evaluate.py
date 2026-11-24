@@ -13,6 +13,10 @@ Usage:
     python -m evaluation.evaluate --generation --sample 5
     python -m evaluation.evaluate --retrieval --report docs/EVAL.md
     python -m evaluation.evaluate --generation --sample 10 --gate --summary "$GITHUB_STEP_SUMMARY"
+    python -m evaluation.evaluate --generation --mode both --sample 10 --report docs/EVAL.md
+        # pipeline vs agent on the same entries: the agent arm lets the model
+        # choose its own retrieval tool calls, judged against what it retrieved
+    python -m evaluation.evaluate --retrieval --agent-retrieval
         # CI gate: exits non-zero when a generation mean is below the documented
         # threshold, and appends sample/models/measured cost to the job summary
 """
@@ -28,7 +32,7 @@ from typing import Any
 from model_config import ANSWER_MODEL, JUDGE_MODEL
 from .dataset import GoldenDataset
 from .retrieval import run_retrieval_eval
-from .generation import run_generation_eval
+from .generation import EVAL_MODES, run_generation_eval
 from .scope_eval import run_scope_eval
 from .gates import (
     GENERATION_THRESHOLDS,
@@ -43,7 +47,10 @@ _STRATEGY_LABELS = {
     "hybrid_rrf": "Hybrid RRF",
     "vector_only": "Vector-only",
     "bm25_only": "BM25-only",
+    "agent_tool": "Agent tool calls",
 }
+
+_AGENT_SUFFIX = " (agent)"
 
 
 def _aggregate_trials(trial_summaries: list[dict]) -> dict[str, Any]:
@@ -114,6 +121,21 @@ def main(argv: list[str] | None = None) -> dict:
         "--compare", type=str, nargs="*",
         help="Additional models to compare against (e.g. --compare claude-haiku-4-5). "
              "A deepseek-* model routes to DeepSeek's API (requires DEEPSEEK_API_KEY)."
+    )
+    parser.add_argument(
+        "--mode", type=str, default="pipeline", choices=list(EVAL_MODES),
+        help="Generation arm(s): pipeline (fixed RAG, the CI gate), agent (tool-use "
+             "loop) or both for a side-by-side comparison (default: pipeline)"
+    )
+    parser.add_argument(
+        "--agent-retrieval", action="store_true",
+        help="Also score the agent's search_docs tool calls in the retrieval eval "
+             "(one model turn per entry, no answer generation)"
+    )
+    parser.add_argument(
+        "--gate-agent", action="store_true",
+        help="Apply the generation thresholds to agent arms too (off by default: "
+             "the thresholds are calibrated on the pipeline)"
     )
     parser.add_argument(
         "--judge", type=str, default=JUDGE_MODEL,
@@ -190,6 +212,7 @@ def main(argv: list[str] | None = None) -> dict:
             dataset,
             ablation=not args.no_ablation,
             verbose=not args.quiet,
+            agent=args.agent_retrieval,
         )
 
     if args.all or args.generation:
@@ -208,6 +231,7 @@ def main(argv: list[str] | None = None) -> dict:
                     sample=args.sample,
                     system_prompt=prompt_text,
                     verbose=not args.quiet,
+                    mode=args.mode,
                 ))
             results["generation"] = _aggregate_trials(trial_summaries)
         else:
@@ -219,6 +243,7 @@ def main(argv: list[str] | None = None) -> dict:
                 sample=args.sample,
                 system_prompt=prompt_text,
                 verbose=not args.quiet,
+                mode=args.mode,
             )
 
     if "generation" in results:
@@ -242,6 +267,7 @@ def main(argv: list[str] | None = None) -> dict:
             "judge": args.judge,
             "sample": args.sample or len(dataset),
             "prompt": args.system_prompt_file or "default",
+            "mode": args.mode,
         }
 
     if args.report:
@@ -260,6 +286,7 @@ def main(argv: list[str] | None = None) -> dict:
                 sample_size=args.sample or len(dataset),
                 model=args.model,
                 judge_model=args.judge,
+                include_agent=args.gate_agent,
             ))
         if not args.quiet:
             print(f"\nJob summary appended to {args.summary}", file=sys.stderr)
@@ -269,7 +296,9 @@ def main(argv: list[str] | None = None) -> dict:
         if "generation" not in results:
             print("error: --gate requires --generation or --all", file=sys.stderr)
             return 2
-        failures = check_generation_thresholds(results["generation"])
+        failures = check_generation_thresholds(
+            results["generation"], include_agent=args.gate_agent
+        )
         failures += check_scope_threshold(results.get("scope"))
         if failures:
             print("\nGeneration gate FAILED:", file=sys.stderr)
@@ -337,6 +366,8 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
         strategies = ["hybrid_rrf"]
         if retrieval.get("ablation"):
             strategies.extend(["vector_only", "bm25_only"])
+        if retrieval.get("agent_tool"):
+            strategies.append("agent_tool")
 
         hybrid_recall5 = 0.0
         for name in strategies:
@@ -374,6 +405,20 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             )
             lines.append("")
 
+        agent_tool = retrieval.get("agent_tool", {})
+        if agent_tool:
+            a_r5 = agent_tool.get("recall", {}).get("recall@5", 0)
+            lines.append(
+                f"**Agent tool calls vs. the pipeline's fixed retrieval: "
+                f"recall@5 {a_r5:.2%} vs. {hybrid_recall5:.2%} "
+                f"({_percent_change(hybrid_recall5, a_r5)}), "
+                f"MRR {agent_tool.get('mrr', 0):.3f} vs. "
+                f"{retrieval.get('hybrid_rrf', {}).get('mrr', 0):.3f}.** "
+                "Each entry gets one model turn in which the model chooses its "
+                "`search_docs` queries; the sections those calls return are scored."
+            )
+            lines.append("")
+
     generation = results.get("generation", {})
     per_model = generation.get("per_model", {})
     if per_model:
@@ -383,14 +428,25 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             prompt_note = ""
             if generation_meta.get("prompt") not in (None, "default"):
                 prompt_note = f" System prompt variant: `{Path(generation_meta['prompt']).name}`."
+            mode = generation_meta.get("mode", "pipeline")
+            mode_note = {
+                "both": " Both arms ran on every entry (pipeline and agent).",
+                "agent": " Agent arm only: retrieval is a tool the model calls.",
+            }.get(mode, "")
             lines.append(
                 f"Sampled eval: {generation_meta['sample']} entries generated by "
                 f"`{generation_meta['model']}`, scored 1-5 by `{generation_meta['judge']}`."
-                + prompt_note
+                + prompt_note + mode_note
             )
             lines.append("")
-        lines.append("| Model | Faithfulness | Relevance | Citation | n | Cost/query | p50 latency |")
-        lines.append("|-------|-------------|-----------|----------|---|------------|-------------|")
+        has_agent = any(m.get("mode") == "agent" for m in per_model.values())
+        header = "| Model | Faithfulness | Relevance | Citation | n | Cost/query | p50 latency |"
+        divider = "|-------|-------------|-----------|----------|---|------------|-------------|"
+        if has_agent:
+            header += " Tool calls |"
+            divider += "-----------|"
+        lines.append(header)
+        lines.append(divider)
         for model_name, mdata in per_model.items():
             f = _format_metric(mean_score(mdata, "faithfulness"))
             r = _format_metric(mean_score(mdata, "relevance"))
@@ -405,10 +461,19 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             if p50 is None:
                 p50 = mdata.get("p50_latency_ms_avg")
             p50_cell = f"{p50 / 1000:.1f}s" if isinstance(p50, (int, float)) else "-"
-            lines.append(
+            row = (
                 f"| {model_name} | {f} | {r} | {c} | {n} | {cost_cell} | {p50_cell} |"
             )
+            if has_agent:
+                tool_calls = mdata.get("avg_tool_calls")
+                tool_calls = mdata.get("avg_tool_calls_avg", tool_calls)
+                row += f" {tool_calls if isinstance(tool_calls, (int, float)) else '-'} |"
+            lines.append(row)
         lines.append("")
+
+        comparison = _agent_comparison(per_model)
+        if comparison:
+            lines.extend(comparison)
 
     scope_result = results.get("scope") or {}
     if scope_result.get("n"):
@@ -439,10 +504,92 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             f"*Generation gate (mean on the 1-5 judge scale): {gate}, "
             f"scope adherence >= {SCOPE_ADHERENCE_THRESHOLD:g}. "
             "Citation correctness is gated: the prompt requires URLs copied "
-            "verbatim from the excerpts, so invented URLs fail the build.*"
+            "verbatim from the excerpts, so invented URLs fail the build. "
+            "The gate is enforced on the pipeline arm; agent-arm scores are "
+            "reported alongside it (`--gate-agent` gates them too).*"
         )
 
     return "\n".join(lines) + "\n"
+
+
+def _agent_comparison(per_model: dict) -> list[str]:
+    """Pipeline-vs-agent rows when both arms ran on the same entries."""
+    pairs = []
+    for label, mdata in per_model.items():
+        if mdata.get("mode") != "agent" and not label.endswith(" (agent)"):
+            continue
+        base_label = label.removesuffix(" (agent)")
+        base = per_model.get(base_label)
+        if base is None:
+            continue
+        pairs.append((base_label, base, label, mdata))
+    if not pairs:
+        return []
+
+    def num(mdata: dict, *keys: str):
+        for key in keys:
+            value = mdata.get(key)
+            if isinstance(value, (int, float)):
+                return value
+        return None
+
+    def score(mdata: dict, dim: str) -> str:
+        value = mean_score(mdata, dim)
+        return f"{value:.2f}" if value is not None else "-"
+
+    def cost(mdata: dict) -> str:
+        value = num(mdata, "avg_total_cost_usd", "avg_total_cost_usd_avg")
+        return f"${value:.4f}" if value is not None else "-"
+
+    def p50(mdata: dict) -> str:
+        value = num(mdata, "p50_latency_ms", "p50_latency_ms_avg")
+        return f"{value / 1000:.1f}s" if value is not None else "-"
+
+    def tools(mdata: dict) -> str:
+        value = num(mdata, "avg_tool_calls", "avg_tool_calls_avg")
+        return f"{value:g}" if value is not None else "0"
+
+    lines = [
+        "### Pipeline vs agent",
+        "",
+        "Same entries, same judge, same 1-5 rubric. The agent arm decides its own "
+        "`search_docs` calls; the pipeline arm retrieves once and generates.",
+        "",
+        "| Arm | Faithfulness | Relevance | Citation | n | Cost/query | p50 latency | Tool calls |",
+        "|-----|--------------|-----------|----------|---|------------|-------------|-----------|",
+    ]
+    for base_label, base, agent_label, agent in pairs:
+        for label, mdata in ((f"{base_label} (pipeline)", base), (agent_label, agent)):
+            lines.append(
+                f"| {label} | {score(mdata, 'faithfulness')} "
+                f"| {score(mdata, 'relevance')} "
+                f"| {score(mdata, 'citation_correctness')} "
+                f"| {mdata.get('n', 0)} | {cost(mdata)} | {p50(mdata)} "
+                f"| {tools(mdata)} |"
+            )
+    lines.append("")
+    for base_label, base, agent_label, agent in pairs:
+        deltas = []
+        for dim, human in (
+            ("faithfulness", "faithfulness"),
+            ("relevance", "relevance"),
+            ("citation_correctness", "citation"),
+        ):
+            b, a = mean_score(base, dim), mean_score(agent, dim)
+            if b is not None and a is not None:
+                deltas.append(f"{human} {a - b:+.2f}")
+        if deltas:
+            skipped = agent.get("skipped_no_context")
+            skipped_note = (
+                f"; {skipped} entr{'y' if skipped == 1 else 'ies'} skipped with no chunks"
+                if skipped else ""
+            )
+            lines.append(
+                f"- **{base_label}**: " + ", ".join(deltas)
+                + f" (agent \u2212 pipeline){skipped_note}."
+            )
+    lines.append("")
+    return lines
 
 
 def _format_scores_table(retrieval_result: dict) -> str:
@@ -451,6 +598,8 @@ def _format_scores_table(retrieval_result: dict) -> str:
     strategies = ["hybrid_rrf"]
     if retrieval_result.get("ablation"):
         strategies.extend(["vector_only", "bm25_only"])
+    if retrieval_result.get("agent_tool"):
+        strategies.append("agent_tool")
 
     header = f"{'Strategy':<16} {'recall@3':>10} {'recall@5':>10} {'recall@10':>10} {'MRR':>8} {'ndcg@5':>8}"
     lines.append(header)

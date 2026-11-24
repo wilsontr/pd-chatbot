@@ -34,26 +34,61 @@ embed_and_index.py  (Voyage AI embeddings → ChromaDB)
 chroma_db/  +  parent_lookup.json
 ```
 
+### Agent core
+
+Requests are served by a hand-written tool-use agent in [`agent/`](agent/), not
+by a fixed pipeline. The model decides whether to search the documentation, what
+to search for, and when it has enough to answer; the loop runs whatever tool calls
+come back and feeds the results into the next turn.
+
+```
+main.py (FastAPI + SSE adapter)
+      ↓  typed events
+agent/chat.py    request orchestration: cache, scope gate, guardrails, artifacts
+      ↓
+agent/loop.py    the tool-use loop: streams text, runs tools, bounded turns
+      ↓
+agent/tools/docs.py  search_docs  →  agent/retrieval.py (hybrid RRF + parent lookup)
+```
+
+The loop emits a typed event stream (`text_delta`, `tool_call`, `tool_result`,
+`sources`, `artifact`, `done`) and imports no web framework, so each interface is
+a thin adapter: the web endpoint maps those events to SSE, and a CLI/Slack/MCP
+adapter maps the same stream to its own transport. Tests drive the loop with a
+scripted model client, so they need no API key.
+
+`rag.py` still contains the original fixed pipeline (classify → retrieve once →
+generate → validate). It is kept as the **baseline arm** of the evaluation so the
+agent's numbers can be compared with the pipeline on the same golden set; it is no
+longer on the serving path.
+
 ### Retrieval
 
-At query time, `rag.py` runs a hybrid search:
+At query time, [`agent/retrieval.py`](agent/retrieval.py) runs a hybrid search:
 
-1. **Query classification** — Claude Haiku classifies the query type (`object_reference`, `conceptual`, or `both`), extracts any Pd object names mentioned, and rewrites the query as a standalone search string when conversation history provides context
-2. **Vector search** — Voyage AI embeds the (rewritten) query; ChromaDB finds semantically similar child chunks
-3. **BM25 keyword search** — exact token matching against the original query, weighted toward object names
+1. **Query classification** — Claude Haiku classifies the query type (`object_reference`, `conceptual`, or `both`), extracts any Pd object names mentioned, and rewrites the query as a standalone search string when conversation history provides context. Agent requests still classify, because the scope gate is a policy decision rather than a tool the model may skip.
+2. **Vector search** — Voyage AI embeds the query; ChromaDB finds semantically similar child chunks
+3. **BM25 keyword search** — exact token matching against the query, weighted toward object names
 4. **Reciprocal Rank Fusion (RRF)** — combines vector and BM25 rankings into a single ranked list
 5. **Parent retrieval** — the top child chunks are mapped back to their full parent sections for richer context
 
-Retrieval quality is measured and regressed in CI — see **[Evaluation Results](docs/EVAL.md)** for current hybrid RRF vs. vector-only vs. BM25-only metrics.
+In agent mode the model calls this through the `search_docs` tool — it picks the
+query, the corpus (`object_reference`, `conceptual` or both) and any exact object
+names — and can call it again if the first results are thin. In the pipeline it
+runs once, routed by the classifier.
+
+Retrieval quality is measured and regressed in CI — see **[Evaluation Results](docs/EVAL.md)** for current hybrid RRF vs. vector-only vs. BM25-only metrics, plus the agent's tool-call retrieval.
 
 ### Response Generation
 
-Retrieved chunks are passed as context to Claude Haiku 5.5 (see
-[`model_config.py`](model_config.py)), which streams a response grounded in the
-documentation via Server-Sent Events (SSE). The frontend renders tokens as they
-arrive; measured on 2026-11-24 with thinking disabled, the first token lands at
-~0.36 s and a typical answer completes in ~3.6 s (the previous Sonnet 4.6 setup:
-~0.63 s to first token, ~14 s to complete). Responses may include:
+The agent calls `search_docs`, gets parent sections back as citable excerpts, and
+answers with Claude Haiku 5.5 (see [`model_config.py`](model_config.py)) streaming
+via Server-Sent Events (SSE). The frontend renders tokens as they arrive. In agent
+mode the first answer token lands after the retrieval round trip (~2.1 s measured,
+~4 s to a complete answer) because the model searches before it writes; the
+single-shot pipeline path measures ~0.36 s to first token. Thinking is disabled for
+the answer model, which is what keeps that round trip short (with thinking on, the
+same measurement was ~4.7 s to first token). Responses may include:
 
 - Inline `[object~]` references in code spans
 - Markdown tables for structured object comparisons
@@ -85,7 +120,33 @@ Current numbers are published in **[EVAL.md](docs/EVAL.md)**, updated on every p
 `main` by a GitHub Actions workflow.
 
 **Retrieval metrics**: recall@k, MRR, nDCG — with ablation against
-vector-only and BM25-only baselines to prove hybrid RRF wins.
+vector-only and BM25-only baselines to prove hybrid RRF wins. `--agent-retrieval`
+adds a fourth row: what the agent's own `search_docs` calls retrieve for each
+entry (one model turn per entry, no answer generation).
+
+**Agent vs pipeline**: the harness runs every model through both arms on the same
+entries with `--mode both` — the pipeline retrieves once and generates; the agent
+chooses its own `search_docs` calls and is judged against the sections it
+retrieved. The report renders a Pipeline vs agent table with the per-dimension
+deltas and the average tool-call count. The CI gate stays on the pipeline arm,
+whose thresholds are calibrated; agent scores are published beside it.
+
+```bash
+# pipeline and agent on the same 10 entries, written to the published report
+python -m evaluation.evaluate --generation --mode both --sample 10 --report docs/EVAL.md
+```
+
+**Measured so far** (2026-11-24, 10 entries, both arms, 1 trial): the agent's tool
+calls retrieve better than the pipeline's single routed search (MRR 0.753 vs.
+0.696, recall@5 76% vs. 75%), and answer quality is at parity within judge noise
+(faithfulness 4.70 vs. 4.70, relevance 5.00 vs. 4.90, citation 4.90 vs. 5.00) at
+slightly lower generation cost ($0.0087 vs. $0.0097 per query) and +1.7 s p50
+latency. The honest reading is that the loop alone does not beat a well-tuned
+pipeline on answer quality; what it buys is the mechanism — re-searching, running
+tools, and self-correcting — that the sandbox and skill subtasks are measured on.
+The first run before a prompt fix showed the failure mode the eval is for: the
+agent stretched a general "subpatches" section to support a claim about `[unpack]`
+(citation 4.40 vs. 5.00), which a tool-guidance and attribution rule fixed.
 
 **Generation metrics**: faithfulness, answer relevance, and citation
 correctness scored by a Claude-as-judge rubric (LLM-as-judge). A sampled run
@@ -104,9 +165,10 @@ decision.
 MRR ≥ 0.30, hybrid ≥ both baselines). Runs on every PR and push.
 
 **CI gating — generation**: a separate workflow runs a sampled generation eval
-on pull requests that touch `rag.py` (the system prompt lives there),
-`evaluation/**` (judge rubric, dataset, harness) or the workflow itself, and
-fails the build when a mean drops below threshold.
+on pull requests that touch `agent/**` (the loop and the answer prompts),
+`rag.py` (the pipeline baseline), `evaluation/**` (judge rubric, dataset,
+harness) or the workflow itself, and fails the build when a mean drops below
+threshold.
 
 | Setting | Value |
 |---|---|
@@ -114,7 +176,7 @@ fails the build when a mean drops below threshold.
 | Judge model | `claude-haiku-4-5` (1–5 rubric) |
 | Sample | 10 of 30 golden entries, deterministic prefix |
 | Gate | faithfulness ≥ 4.0, relevance ≥ 4.5, citation ≥ 4.0 (collapse guard) |
-| Cost bound | **~$0.13 per PR run** (10 generations + 30 judge calls + 20 scope classifications at measured rates) |
+| Cost bound | **~$0.19 per PR run** (10 entries x 2 arms: 20 generations, ~60 judge calls and 20 scope classifications at measured rates) |
 
 Citation correctness is gated as a collapse guard: the system prompt requires
 URLs to be copied verbatim from the retrieved excerpts, which lifted the
@@ -180,17 +242,21 @@ at a dump. The command also works against the local SQLite `feedback.db`.
 ### pd-patch validation
 
 Patch diagram JSON is validated server-side with Pydantic (`pd_schema.py`).
-If a block fails validation in the synchronous `chat()` path, the answer is
-retried once with a correction prompt. The streaming path replaces malformed
-blocks with a `[patch diagram]` placeholder. Parse failures are tracked via
+If a block fails validation in the synchronous pipeline `chat()` path, the answer
+is retried once with a correction prompt. The streaming paths (the agent, and the
+pipeline's SSE arm) replace malformed blocks with a `[patch diagram]` placeholder,
+because the answer is already on the wire. Parse failures are tracked via
 New Relic (`Custom/PdPatch/ParseFailure`) and Langfuse (`pd_patch_valid`
-score).
+score); validated patches are also emitted as `artifact` events so an interface
+can render the diagram without re-parsing the prose.
 
 ### Scope gate
 
 Questions outside Pure Data are refused before generation, and in-domain harmful
-requests are declined, using the classification call the pipeline already makes
-once per query (see [`scope.py`](scope.py)):
+requests are declined, using the classification call the request already makes
+once per query (see [`scope.py`](scope.py)). The agent runs this gate before its
+loop, because a refusal is a policy decision rather than a tool the model may
+skip:
 
 - **Off-topic** — "What is the capital of France?" gets a short refusal naming Pd
   and suggesting Pd topics. No retrieval, no generation call.
@@ -202,8 +268,10 @@ once per query (see [`scope.py`](scope.py)):
   generation. The system prompt also carries an explicit policy instruction, so a
   case the classifier misses is still declined by the model.
 - **Low relevance** — hybrid retrieval always returns its top-k, so a cutoff on
-  the best cosine similarity (0.42) sends queries with no real match down the
-  existing "couldn't find relevant documentation" path. Measured against the
+  the best cosine similarity (0.42) makes both the pipeline's retrieval step and
+  the agent's `search_docs` tool return nothing for a query with no real match
+  (the agent then says the docs don't cover it, and must not invent a URL).
+  Measured against the
   golden set: the lowest legitimate question scores 0.449 (p10 0.504) while 12
   unrelated probes top out at 0.433 (median 0.297), so the cutoff sits 0.03 below
   the lowest legitimate query.
@@ -316,16 +384,20 @@ A [GitHub Actions workflow](.github/workflows/eval.yml) runs on every push and
 PR:
 
 1. Builds ChromaDB from committed chunk files
-2. Runs the retrieval evaluation (recall@k, MRR, nDCG) — and, on `main`, a
-   sampled generation eval — writing `docs/EVAL.md`
+2. Runs the retrieval evaluation (recall@k, MRR, nDCG) — plus, on `main`, the
+   agent's tool-call retrieval and a sampled pipeline-vs-agent generation eval —
+   writing `docs/EVAL.md`
 3. Auto-commits `docs/EVAL.md` to `main` (skips on PRs)
 4. Runs `pytest tests/` with threshold assertions
 
 A second workflow
 ([`generation-eval.yml`](.github/workflows/generation-eval.yml)) adds the
-generation gate on pull requests that touch `rag.py`, `evaluation/**` or itself,
-failing the build below the documented faithfulness/relevance thresholds and
-reporting the measured cost in the job summary.
+generation gate on pull requests that touch `agent/**`, `rag.py`,
+`evaluation/**` or itself, failing the build below the documented
+faithfulness/relevance thresholds and reporting the measured cost in the job
+summary. Both arms run so a change under `agent/` is measured by the arm it
+changes; the threshold check stays on the pipeline arm until the agent has its
+own calibrated baseline.
 
 Requires `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY` set as [repository secrets](https://github.com/wilsontr/pd-chatbot/settings/secrets/actions).
 

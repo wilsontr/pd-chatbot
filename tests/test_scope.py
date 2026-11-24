@@ -299,15 +299,16 @@ class TestPipelineScope:
 class TestRelevanceCutoff:
     def test_retrieve_returns_nothing_below_the_cutoff(self):
         import rag
+        from agent import retrieval
 
         with patch.object(rag, "classify_query", lambda q, h: {
                 "rewritten_query": q, "query_type": "conceptual", "object_names": [],
                 "scope": "in_scope"}), \
-             patch.object(rag, "vc") as fake_vc, \
-             patch.object(rag, "hybrid_retrieve", lambda *a, **k: [
+             patch.object(retrieval, "vc") as fake_vc, \
+             patch.object(retrieval, "hybrid_retrieve", lambda *a, **k: [
                  {"id": "c1", "heading_path": "h", "text": "t", "url": "u",
                   "source": "s", "content_type": "conceptual", "object_name": None}]), \
-             patch.object(rag, "max_similarity", lambda *a, **k: 0.30):
+             patch.object(retrieval, "max_similarity", lambda *a, **k: 0.30):
             fake_vc.embed.return_value.embeddings = [[0.0] * 8]
             chunks, classification = rag.retrieve("unrelated question")
         assert chunks == []
@@ -315,15 +316,16 @@ class TestRelevanceCutoff:
 
     def test_retrieve_keeps_chunks_above_the_cutoff(self):
         import rag
+        from agent import retrieval
 
         with patch.object(rag, "classify_query", lambda q, h: {
                 "rewritten_query": q, "query_type": "conceptual", "object_names": [],
                 "scope": "in_scope"}), \
-             patch.object(rag, "vc") as fake_vc, \
-             patch.object(rag, "hybrid_retrieve", lambda *a, **k: [
+             patch.object(retrieval, "vc") as fake_vc, \
+             patch.object(retrieval, "hybrid_retrieve", lambda *a, **k: [
                  {"id": "c1", "heading_path": "h", "text": "t", "url": "u",
                   "source": "s", "content_type": "conceptual", "object_name": None}]), \
-             patch.object(rag, "max_similarity", lambda *a, **k: 0.62):
+             patch.object(retrieval, "max_similarity", lambda *a, **k: 0.62):
             fake_vc.embed.return_value.embeddings = [[0.0] * 8]
             chunks, _ = rag.retrieve("[osc~] inlets")
         assert len(chunks) == 1

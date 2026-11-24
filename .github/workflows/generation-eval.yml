@@ -7,14 +7,16 @@ name: Generation eval gate
 # when faithfulness or relevance drops below the thresholds documented in
 # evaluation/gates.py and the README.
 #
-# Paths: rag.py holds SYSTEM_PROMPT; evaluation/** holds the judge rubric, the
-# golden dataset and the harness. A dataset edit can move the scores on its own,
-# so it belongs in the trigger too.
+# Paths: agent/ holds the loop and the answer prompts (agent/prompt.py); rag.py
+# holds the pipeline baseline and its copy of the prompt; evaluation/** holds the
+# judge rubric, the golden dataset and the harness. A dataset edit can move the
+# scores on its own, so it belongs in the trigger too.
 
 on:
   pull_request:
     branches: [main]
     paths:
+      - 'agent/**'
       - 'rag.py'
       - 'evaluation/**'
       - '.github/workflows/generation-eval.yml'
@@ -53,10 +55,12 @@ jobs:
         run: |
           python embed_and_index.py
 
-      # Cost bound: sample size x (generation + 3 judge calls). At the measured
-      # ~$0.031/entry that is about $0.32 for the default 10-entry run. The
-      # summary written to $GITHUB_STEP_SUMMARY states the sample, both models
-      # and the measured dollars for the run that actually happened.
+      # Cost bound: sample size x 2 arms x (generation + 3 judge calls). Both
+      # arms run so a change under agent/ is measured by the arm it changes; the
+      # gate itself checks the pipeline arm, whose thresholds are calibrated
+      # (agent scores are reported and will be gated by TASK-5.7). Measured
+      # $0.18 for the default 10-entry both-arm run. The summary written to
+      # $GITHUB_STEP_SUMMARY states the sample, models and measured dollars.
       - name: Run sampled generation eval (gated)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -65,6 +69,7 @@ jobs:
         run: |
           python -m evaluation.evaluate \
             --generation \
+            --mode both \
             --sample "$SAMPLE" \
             --gate \
             --summary "$GITHUB_STEP_SUMMARY" \

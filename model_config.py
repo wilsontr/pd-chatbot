@@ -1,9 +1,10 @@
 """Single source of truth for the models the app and its evaluations use.
 
-The answer model is named in four places in ``rag.py`` (sync generation, the
-async streaming path, and two observability spans), plus the evaluation CLI
-default and the CI gate. Keeping the id here means a model switch is one edit
-and cannot drift between production and the gate that guards it.
+The answer model is named in the agent loop's default config
+(``AgentConfig.model``), in the pipeline baseline's generation paths, in the
+evaluation CLI default and in the CI gate. Keeping the id here means a model
+switch is one edit and cannot drift between production and the gate that guards
+it.
 
 ``JUDGE_MODEL`` is the model that scores answers (CI gate, and the inline
 faithfulness check in production). It is deliberately pinned to haiku-4-5: the

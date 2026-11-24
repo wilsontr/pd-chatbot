@@ -1,9 +1,12 @@
 """Retrieval metrics: recall@k, MRR, nDCG with ablation variants.
 
 Runs the full retrieval pipeline and also vector-only / BM25-only baselines
-to prove hybrid RRF beats either alone.
+to prove hybrid RRF beats either alone. With ``agent=True`` it adds a fourth
+strategy — what the agent's own ``search_docs`` tool calls retrieve — so the
+report can show whether letting the model write the query helps or hurts.
 """
 
+import asyncio
 import math
 from typing import Any
 
@@ -149,6 +152,28 @@ def _run_bm25_only(entry: GoldenEntry) -> RetrievalResult:
     )
 
 
+def _run_agent_tool(entry: GoldenEntry) -> RetrievalResult:
+    """What the agent's search_docs tool calls retrieve for this question.
+
+    The run is capped at one turn with no forced final answer: the model gets to
+    call its tools, and the chunks it asked for are scored. That measures the
+    model's query choice without paying for a full answer per entry.
+    """
+    from agent.chat import answer_question
+    from agent.loop import AgentConfig
+
+    result = asyncio.run(answer_question(
+        entry.question,
+        entry.history,
+        config=AgentConfig(max_turns=1, force_final_answer=False),
+    ))
+    return RetrievalResult(
+        entry.id,
+        _parent_ids_from_chunks(list(result.chunks)),
+        set(entry.relevant_chunk_ids),
+    )
+
+
 def _only_entries_with_relevant(dataset: GoldenDataset) -> list[GoldenEntry]:
     return [e for e in dataset.entries if e.relevant_chunk_ids]
 
@@ -170,11 +195,13 @@ def run_retrieval_eval(
     dataset: GoldenDataset,
     ablation: bool = True,
     verbose: bool = False,
+    agent: bool = False,
 ) -> dict[str, Any]:
     """Run retrieval evaluation on the golden dataset.
 
     Returns a dict with scores for hybrid (current default) and optionally
-    vector-only and BM25-only baselines.
+    vector-only and BM25-only baselines, plus the agent's tool-call strategy
+    when ``agent`` is set.
     """
     entries = _only_entries_with_relevant(dataset)
     if not entries:
@@ -191,6 +218,8 @@ def run_retrieval_eval(
     if ablation:
         strategies["vector_only"] = _run_vector_only
         strategies["bm25_only"] = _run_bm25_only
+    if agent:
+        strategies["agent_tool"] = _run_agent_tool
 
     for name, runner in strategies.items():
         results: list[RetrievalResult] = []

@@ -1,5 +1,13 @@
 """Generation evaluation: produce answers and score them via LLM-as-judge.
 
+Two arms, selected with ``mode``:
+
+- ``pipeline`` — the fixed pipeline: retrieve once, then generate (``rag.py``).
+- ``agent`` — the tool-use loop: the model calls ``search_docs`` itself, and is
+  judged against the sections its own tool calls retrieved.
+- ``both`` — run every model through both arms in the same pass, so the report
+  can compare them on the same entries, judge and thresholds.
+
 Supports:
   - Single-model evaluation (default is model_config.ANSWER_MODEL)
   - Model comparison (Sonnet vs Haiku vs any model, including other providers)
@@ -9,6 +17,7 @@ Cross-provider models: any model name starting with "deepseek" is routed to
 DeepSeek's OpenAI-compatible API (requires DEEPSEEK_API_KEY) instead of Anthropic.
 """
 
+import asyncio
 import logging
 import os
 import statistics
@@ -26,8 +35,8 @@ from model_config import (
     thinking_kwargs,
 )
 
-from .dataset import GoldenDataset
-from .judge import evaluate_generation, compare_models
+from .dataset import GoldenDataset, GoldenEntry
+from .judge import evaluate_generation
 from .retry import with_retries
 from rag import (
     retrieve,
@@ -40,6 +49,10 @@ from rag import (
 logger = logging.getLogger(__name__)
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+EVAL_MODES = ("pipeline", "agent", "both")
+
+_AGENT_LABEL_SUFFIX = " (agent)"
 
 _deepseek_client: openai.OpenAI | None = None
 
@@ -122,6 +135,46 @@ def _generate(
     return text_of(response), usage
 
 
+def _agent_label(model: str) -> str:
+    return f"{model}{_AGENT_LABEL_SUFFIX}"
+
+
+def _agent_usage(usage: dict[str, int]) -> dict[str, int]:
+    """Normalise the loop's usage dict to the harness's token spelling."""
+    return {
+        "input_tokens": int(usage.get("input", 0)),
+        "output_tokens": int(usage.get("output", 0)),
+        "cache_read_tokens": int(usage.get("cache_read", 0)),
+    }
+
+
+def _agent_answer(
+    model: str,
+    entry: GoldenEntry,
+    system_prompt: str | None = None,
+):
+    """Run one golden entry through the agent loop (blocking)."""
+    from agent.chat import answer_question
+    from agent.loop import AgentConfig
+    from agent.prompt import AGENT_SYSTEM_PROMPT
+
+    config = AgentConfig(
+        model=model,
+        system_prompt=system_prompt or AGENT_SYSTEM_PROMPT,
+    )
+    return asyncio.run(
+        answer_question(entry.question, entry.history, config=config)
+    )
+
+
+def _arm_names(mode: str) -> tuple[str, ...]:
+    if mode == "both":
+        return ("pipeline", "agent")
+    if mode == "agent":
+        return ("agent",)
+    return ("pipeline",)
+
+
 def run_generation_eval(
     *,
     dataset: GoldenDataset,
@@ -131,6 +184,7 @@ def run_generation_eval(
     sample: int | None = None,
     system_prompt: str | None = None,
     verbose: bool = False,
+    mode: str = "pipeline",
 ) -> dict[str, Any]:
     """Run generation evaluation.
 
@@ -141,12 +195,19 @@ def run_generation_eval(
         compare: Optional list of additional models for comparison
         sample: Limit to N entries (None = all)
         system_prompt: Alternative system prompt to score instead of the shipped
-            one (prompt-variant experiments); None uses rag.SYSTEM_PROMPT
+            one (prompt-variant experiments); None uses the shipped prompt for
+            both arms (``rag.SYSTEM_PROMPT`` / ``agent.prompt.AGENT_SYSTEM_PROMPT``)
         verbose: Print progress
+        mode: "pipeline" (default, the CI gate), "agent", or "both"
 
     Returns:
-        Dict with per-entry and aggregate scores.
+        Dict with per-arm and per-entry scores. Arms are keyed by model name for
+        the pipeline and "<model> (agent)" for the agent, so both can live in one
+        report without colliding.
     """
+    if mode not in EVAL_MODES:
+        raise ValueError(f"mode must be one of {EVAL_MODES}, got {mode!r}")
+
     entries = dataset.entries
     if sample:
         entries = entries[:sample]
@@ -156,94 +217,133 @@ def run_generation_eval(
     if compare:
         models_to_run.extend(m for m in compare if m != model)
 
-    results: dict[str, list[dict[str, Any]]] = {m: [] for m in models_to_run}
-    # Judge-token accumulator per generation model: {model: {judge_model: counts}}.
+    arms = _arm_names(mode)
+    labels: dict[tuple[str, str], str] = {
+        (arm, m): (m if arm == "pipeline" else _agent_label(m))
+        for arm in arms
+        for m in models_to_run
+    }
+
+    results: dict[str, list[dict[str, Any]]] = {label: [] for label in labels.values()}
+    # Judge-token accumulator per arm: {label: {judge_model: counts}}.
     # Measured, not estimated, so the CI job summary can state what a run cost.
-    judge_usage: dict[str, dict[str, dict[str, int]]] = {m: {} for m in models_to_run}
+    judge_usage: dict[str, dict[str, dict[str, int]]] = {
+        label: {} for label in labels.values()
+    }
+    skipped: dict[str, int] = {label: 0 for label in labels.values()}
+
+    def record(
+        entry: GoldenEntry,
+        arm: str,
+        m: str,
+        scores: dict[str, Any],
+        answer: str,
+        usage: dict[str, int],
+        latency_ms: float,
+        **extra: Any,
+    ) -> None:
+        label = labels[(arm, m)]
+        results[label].append({
+            "entry_id": entry.id,
+            "model": m,
+            "arm": arm,
+            "label": label,
+            "answer": answer,
+            "scores": scores,
+            "usage": usage,
+            "latency_ms": round(latency_ms, 1),
+            **extra,
+        })
+        if verbose:
+            for dim, s in scores.items():
+                print(f"  [{label}] {dim}: {s.get('score')} — {s.get('explanation', '')[:80]}")
 
     for i, entry in enumerate(entries):
         if verbose:
             print(f"[{i+1}/{len(entries)}] {entry.id}: {entry.question[:60]}...")
 
-        chunks, classification = retrieve(entry.question, entry.history)
-        if not chunks:
-            if verbose:
-                print(f"  SKIP — no chunks retrieved")
-            continue
+        pipeline_chunks: list[dict[str, Any]] | None = None
+        if "pipeline" in arms:
+            pipeline_chunks, _classification = retrieve(entry.question, entry.history)
 
-        model_answers: dict[str, str] = {}
-        model_usage: dict[str, dict[str, int]] = {}
-        model_latency_ms: dict[str, float] = {}
-        for m in models_to_run:
-            try:
-                started = time.perf_counter()
-                answer, usage = _generate(
-                    client, m, entry.question, chunks, entry.history,
-                    system_prompt=system_prompt,
-                )
-                latency_ms = (time.perf_counter() - started) * 1000
-                model_answers[m] = answer
-                model_usage[m] = usage
-                model_latency_ms[m] = latency_ms
-                if verbose:
-                    print(f"  [{m}] generated ({len(answer)} chars, "
-                          f"{usage['input_tokens']}in/{usage['output_tokens']}out tokens)")
-            except Exception as exc:
-                logger.error("Generation failed for %s with %s: %s", entry.id, m, exc)
-                model_answers[m] = f"[ERROR: {exc}]"
-                model_usage[m] = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
-                model_latency_ms[m] = 0.0
-
-        if len(model_answers) > 1:
-            scores = compare_models(
-                client,
-                question=entry.question,
-                answers=model_answers,
-                context_chunks=chunks,
-                judge_model=judge_model,
-                usage_sinks=judge_usage,
-            )
-            # Flatten: scores = {"sonnet": {"faithfulness": {...}, ...}, "haiku": {...}}
-            for m_name, m_scores in scores.items():
-                entry_result = {
-                    "entry_id": entry.id,
-                    "model": m_name,
-                    "answer": model_answers[m_name],
-                    "scores": m_scores,
-                    "usage": model_usage[m_name],
-                    "latency_ms": round(model_latency_ms.get(m_name, 0.0), 1),
-                }
-                results[m_name].append(entry_result)
-                if verbose:
-                    for dim, s in m_scores.items():
-                        print(f"  [{m_name}] {dim}: {s.get('score')} — {s.get('explanation', '')[:80]}")
-        else:
-            m = models_to_run[0]
-            scores = evaluate_generation(
-                client,
-                question=entry.question,
-                answer=model_answers[m],
-                context_chunks=chunks,
-                judge_model=judge_model,
-                usage_sink=judge_usage[m],
-            )
-            entry_result = {
-                "entry_id": entry.id,
-                "model": m,
-                "answer": model_answers[m],
-                "scores": scores,
-                "usage": model_usage[m],
-                "latency_ms": round(model_latency_ms.get(m, 0.0), 1),
-            }
-            results[m].append(entry_result)
-            if verbose:
-                for dim, s in scores.items():
-                    print(f"  {dim}: {s.get('score')} — {s.get('explanation', '')[:80]}")
+        for arm in arms:
+            if arm == "pipeline":
+                chunks = pipeline_chunks or []
+                if not chunks:
+                    if verbose:
+                        print("  SKIP — no chunks retrieved")
+                    for m in models_to_run:
+                        skipped[labels[(arm, m)]] += 1
+                    continue
+                for m in models_to_run:
+                    label = labels[(arm, m)]
+                    try:
+                        started = time.perf_counter()
+                        answer, usage = _generate(
+                            client, m, entry.question, chunks, entry.history,
+                            system_prompt=system_prompt,
+                        )
+                        latency_ms = (time.perf_counter() - started) * 1000
+                        if verbose:
+                            print(f"  [{label}] generated ({len(answer)} chars, "
+                                  f"{usage['input_tokens']}in/{usage['output_tokens']}out tokens)")
+                    except Exception as exc:
+                        logger.error("Generation failed for %s with %s: %s", entry.id, m, exc)
+                        answer = f"[ERROR: {exc}]"
+                        usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+                        latency_ms = 0.0
+                    scores = evaluate_generation(
+                        client,
+                        question=entry.question,
+                        answer=answer,
+                        context_chunks=chunks,
+                        judge_model=judge_model,
+                        usage_sink=judge_usage[label],
+                    )
+                    record(entry, arm, m, scores, answer, usage, latency_ms,
+                           chunks_retrieved=len(chunks))
+            else:
+                for m in models_to_run:
+                    label = labels[(arm, m)]
+                    try:
+                        started = time.perf_counter()
+                        result = _agent_answer(m, entry, system_prompt=system_prompt)
+                        latency_ms = (time.perf_counter() - started) * 1000
+                        answer = result.answer
+                        chunks = list(result.chunks)
+                        usage = _agent_usage(result.usage)
+                        if verbose:
+                            print(f"  [{label}] generated ({len(answer)} chars, "
+                                  f"{len(chunks)} chunks, {result.tool_calls} tool calls)")
+                    except Exception as exc:
+                        logger.error("Agent run failed for %s with %s: %s", entry.id, m, exc)
+                        continue
+                    if not chunks:
+                        if verbose:
+                            print("  SKIP — the agent retrieved no chunks")
+                        skipped[label] += 1
+                        continue
+                    scores = evaluate_generation(
+                        client,
+                        question=entry.question,
+                        answer=answer,
+                        context_chunks=chunks,
+                        judge_model=judge_model,
+                        usage_sink=judge_usage[label],
+                    )
+                    record(entry, arm, m, scores, answer, usage, latency_ms,
+                           chunks_retrieved=len(chunks),
+                           tool_calls=result.tool_calls,
+                           retrieval_calls=result.retrieval_calls,
+                           turns=result.turns)
 
     # Aggregate
-    summary: dict[str, Any] = {"per_model": {}}
-    for m_name, entries_list in results.items():
-        model_summary: dict[str, Any] = {"n": len(entries_list)}
+    summary: dict[str, Any] = {"per_model": {}, "mode": mode}
+    for label, entries_list in results.items():
+        arm = "agent" if label.endswith(_AGENT_LABEL_SUFFIX) else "pipeline"
+        model_summary: dict[str, Any] = {"n": len(entries_list), "mode": arm}
+        if skipped.get(label):
+            model_summary["skipped_no_context"] = skipped[label]
         for dim in ("faithfulness", "relevance", "citation_correctness"):
             scores = [
                 e["scores"][dim]["score"]
@@ -264,8 +364,19 @@ def run_generation_eval(
                 model_summary[f"{dim}_min"] = min(scores)
                 model_summary[f"{dim}_max"] = max(scores)
 
+        if arm == "agent" and entries_list:
+            model_summary["avg_tool_calls"] = round(
+                sum(e.get("tool_calls", 0) for e in entries_list) / len(entries_list), 2
+            )
+            model_summary["avg_retrieval_calls"] = round(
+                sum(e.get("retrieval_calls", 0) for e in entries_list) / len(entries_list), 2
+            )
+            model_summary["avg_turns"] = round(
+                sum(e.get("turns", 0) for e in entries_list) / len(entries_list), 2
+            )
+
         usages = [e["usage"] for e in entries_list if e.get("usage")]
-        judge_usages = judge_usage.get(m_name, {})
+        judge_usages = judge_usage.get(label, {})
         judge_costs = [
             _cost_usd(judge_model_name, u) for judge_model_name, u in judge_usages.items()
         ]
@@ -290,7 +401,8 @@ def run_generation_eval(
             avg_input = sum(u["input_tokens"] for u in usages) / len(usages)
             avg_output = sum(u["output_tokens"] for u in usages) / len(usages)
             avg_cache_read = sum(u["cache_read_tokens"] for u in usages) / len(usages)
-            costs = [_cost_usd(m_name, u) for u in usages]
+            generation_model = label.removesuffix(_AGENT_LABEL_SUFFIX)
+            costs = [_cost_usd(generation_model, u) for u in usages]
             costs = [c for c in costs if c is not None]
             model_summary["avg_input_tokens"] = round(avg_input, 1)
             model_summary["avg_output_tokens"] = round(avg_output, 1)
@@ -320,18 +432,21 @@ def run_generation_eval(
             model_summary["p95_latency_ms"] = round(ordered[p95_index], 1)
             model_summary["max_latency_ms"] = round(max(ordered), 1)
 
-        summary["per_model"][m_name] = model_summary
+        summary["per_model"][label] = model_summary
 
     summary["entries"] = [
         {
             "id": m["entry_id"],
             "model": m["model"],
+            "arm": m["arm"],
+            "label": m["label"],
             "scores": {
                 dim: {"score": s.get("score"), "explanation": s.get("explanation")}
                 for dim, s in m["scores"].items()
             },
             "usage": m.get("usage"),
             "latency_ms": m.get("latency_ms"),
+            "chunks_retrieved": m.get("chunks_retrieved"),
         }
         for model_results in results.values()
         for m in model_results

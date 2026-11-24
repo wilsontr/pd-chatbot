@@ -66,6 +66,8 @@ jobs:
         run: |
           python -m evaluation.evaluate \
             --all \
+            --mode both \
+            --agent-retrieval \
             --sample "$SAMPLE" \
             --report docs/EVAL.md \
             --gate \

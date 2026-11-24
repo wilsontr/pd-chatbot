@@ -1,4 +1,14 @@
 # main.py
+"""HTTP adapter over the agent core.
+
+The endpoint owns transport concerns only: auth, rate limiting, SSE framing, and
+attaching the stored message id to the terminal event. Every decision about how
+an answer is produced lives in ``agent/``; the typed event stream from
+``agent.chat.stream_chat`` is mapped to the wire format the browser already
+consumes (``meta`` / ``chunk`` / ``done``), and the agent-specific events
+(``tool_call``, ``tool_result``, ``artifact``) are forwarded as additive frames
+that older clients ignore.
+"""
 import asyncio
 import hashlib
 import hmac
@@ -18,8 +28,12 @@ from typing import List, Literal, Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from agent.cache import response_cache as _response_cache
+from agent.cache import stats as _cache_stats
+from agent.chat import stream_chat
+from agent.events import Artifact, Done, Sources, TextDelta, ToolCall, ToolResult
+from agent.observability import flush as flush_tracing
 from feedback_store import FeedbackStore, UnknownMessageError
-from rag import _response_cache, async_stream_chat, _langfuse
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +56,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.on_event("shutdown")
 async def shutdown():
-    if _langfuse is not None:
-        _langfuse.flush()
+    flush_tracing()
 
 # --- CORS ---
 ALLOWED_ORIGIN = os.environ["ALLOWED_ORIGIN"]
@@ -120,6 +133,10 @@ class FeedbackRequest(BaseModel):
     comment: str = ""
 
 
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event)}\n\n"
+
+
 # --- Endpoints ---
 @app.post("/chat", dependencies=[Depends(require_api_key)])
 @limiter.limit("10/minute")
@@ -131,26 +148,42 @@ async def chat_endpoint(request: Request, req: ChatRequest):
         # when it completes. Feedback then refers to this stored row, not to the
         # in-memory response cache (which is keyed by question and expires).
         answer_parts: list[str] = []
+        final_answer = ""
         sources: list[dict] = []
         query_type = ""
-        async for event in async_stream_chat(req.message, history_dicts):
-            if event["type"] == "meta":
-                sources = event.get("sources", [])
-                query_type = event.get("query_type", "")
-            elif event["type"] == "chunk":
-                answer_parts.append(event["text"])
-            elif event["type"] == "done":
+        async for event in stream_chat(req.message, history_dicts):
+            if isinstance(event, Sources):
+                # The browser creates the assistant message on `meta`, so this
+                # frame must come before the first `chunk` (the core guarantees it).
+                sources = list(event.items)
+                query_type = event.query_type
+                yield _sse({"type": "meta", "sources": sources, "query_type": query_type})
+            elif isinstance(event, TextDelta):
+                answer_parts.append(event.text)
+                yield _sse({"type": "chunk", "text": event.text})
+            elif isinstance(event, ToolCall):
+                yield _sse(event.to_dict())
+            elif isinstance(event, ToolResult):
+                yield _sse(event.to_dict())
+            elif isinstance(event, Artifact):
+                yield _sse(event.to_dict())
+            elif isinstance(event, Done):
+                final_answer = event.answer
+                payload = event.to_dict()
                 try:
-                    event["message_id"] = await asyncio.to_thread(
+                    payload["message_id"] = await asyncio.to_thread(
                         feedback_store.save_response,
-                        req.message, "".join(answer_parts), sources, query_type,
+                        req.message,
+                        final_answer or "".join(answer_parts),
+                        sources,
+                        query_type,
                     )
                 except Exception:
                     # Never fail the chat because storage is down; without an id
                     # the frontend simply hides the feedback buttons.
                     logger.exception("failed to store response for feedback")
-                    event["message_id"] = None
-            yield f"data: {json.dumps(event)}\n\n"
+                    payload["message_id"] = None
+                yield _sse(payload)
 
     return StreamingResponse(
         generate(),
@@ -183,9 +216,10 @@ async def feedback_endpoint(request: Request, req: FeedbackRequest):
 async def health():
     return {
         "status": "ok",
+        "engine": "agent",
         "cache": {
-            "size": len(_response_cache),
-            "maxsize": _response_cache.maxsize,
-            "ttl_seconds": _response_cache.ttl,
+            "size": _cache_stats()["size"],
+            "maxsize": _cache_stats()["maxsize"],
+            "ttl_seconds": _cache_stats()["ttl_seconds"],
         },
     }

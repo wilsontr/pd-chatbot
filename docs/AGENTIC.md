@@ -6,10 +6,16 @@ tracked in Backlog as TASK-5 and its subtasks.
 
 ## Where pd-chatbot stands today
 
-`rag.py` is a **fixed pipeline**: classify, retrieve, generate, then validate
-the patch or faithfulness and retry. The validation retry loop is already a
-small agent loop, but the model never chooses an action and no tool result
-changes what happens next.
+`rag.py` **was** a fixed pipeline: classify, retrieve, generate, then validate the
+patch or faithfulness and retry. That shape was already a small agent loop, but
+the model never chose an action and no tool result changed what happened next.
+
+**TASK-5.1 shipped the first step:** the request logic now lives in `agent/`, the
+model calls retrieval as a `search_docs` tool, and the loop yields a typed event
+stream that the web endpoint adapts to SSE. The old pipeline is still in `rag.py`
+as the evaluation baseline, so the agent can be measured against it
+(`python -m evaluation.evaluate --generation --mode both`). The remaining
+sections below are the roadmap from here.
 
 **The principle:** give the model tools whose results change the outcome, then
 use the existing eval harness to show that the agent does better than the
@@ -131,7 +137,10 @@ capability registries.
 core package, for example `agent/` with `loop.py`, `tools/`, `skills/` and
 `store.py`. The loop emits a typed event stream (`text_delta`, `tool_call`,
 `tool_result`, `artifact`). Each interface becomes a thin adapter over that
-stream:
+stream. *Done in TASK-5.1 for `loop.py`, `tools/` and the typed stream; `skills/`
+and `store.py` arrive with TASK-5.13 and TASK-5.9.*
+
+The adapters that follow from that boundary:
 
 | Interface | Implementation notes |
 |---|---|
