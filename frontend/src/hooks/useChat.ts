@@ -7,6 +7,7 @@ export function useChat() {
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([])
   const [loading, setLoading] = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const sessionIdRef = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -51,7 +52,11 @@ export function useChat() {
           'Content-Type': 'application/json',
           'X-API-Key': import.meta.env.VITE_CHAT_API_KEY ?? '',
         },
-        body: JSON.stringify({ message: question, history: chatHistory }),
+        body: JSON.stringify({
+          message: question,
+          history: chatHistory,
+          ...(sessionIdRef.current ? { session_id: sessionIdRef.current } : {}),
+        }),
         signal: controller.signal,
       })
 
@@ -77,6 +82,9 @@ export function useChat() {
 
           if (event.type === 'done') {
             sawDone = true
+            if (event.session_id) {
+              sessionIdRef.current = event.session_id
+            }
             updateAssistant(last => applyStreamEvent(last, event))
             if (Array.isArray(event.history)) {
               setChatHistory(event.history)

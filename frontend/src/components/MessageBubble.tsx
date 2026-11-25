@@ -1,11 +1,13 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useState } from 'react'
+import { History } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { AgentSteps } from './AgentSteps'
 import { PatchAudioPlayer } from './PatchAudioPlayer'
 import { PdPatchViewer } from './PdPatchViewer'
 import { submitFeedback } from '@/lib/auth'
+import { runPath } from '@/lib/routes'
 import type { Message } from '../types'
 import type { Components } from 'react-markdown'
 
@@ -48,9 +50,11 @@ const markdownComponents: Components = {
 export function MessageBubble({
   message,
   isStreaming = false,
+  onOpenRun,
 }: {
   message: Message
   isStreaming?: boolean
+  onOpenRun?: (runId: string) => void
 }) {
   const isUser = message.role === 'user'
   const [rating, setRating] = useState<'up' | 'down' | null>(null)
@@ -143,30 +147,50 @@ export function MessageBubble({
           </div>
         )}
 
-        {!isUser && message.messageId && message.content !== '' && (
-          <div className="flex gap-1 px-0.5">
-            <button
-              onClick={() => handleFeedback('up')}
-              className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
-                rating === 'up'
-                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-              }`}
-              title="Helpful"
-            >
-              {rating === 'up' ? '👍' : '👍'}
-            </button>
-            <button
-              onClick={() => handleFeedback('down')}
-              className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
-                rating === 'down'
-                  ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-              }`}
-              title="Not helpful"
-            >
-              {rating === 'down' ? '👎' : '👎'}
-            </button>
+        {!isUser && (message.messageId || message.runId) && message.content !== '' && (
+          <div className="flex items-center gap-1.5 px-0.5">
+            {message.messageId && (
+              <>
+                <button
+                  onClick={() => handleFeedback('up')}
+                  className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                    rating === 'up'
+                      ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                  }`}
+                  title="Helpful"
+                >
+                  👍
+                </button>
+                <button
+                  onClick={() => handleFeedback('down')}
+                  className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                    rating === 'down'
+                      ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                  }`}
+                  title="Not helpful"
+                >
+                  👎
+                </button>
+              </>
+            )}
+            {message.runId && (
+              <a
+                href={runPath(message.runId)}
+                onClick={e => {
+                  if (onOpenRun && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                    e.preventDefault()
+                    onOpenRun(message.runId!)
+                  }
+                }}
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
+                title="Replay this run step by step"
+              >
+                <History className="size-3" />
+                Replay run
+              </a>
+            )}
           </div>
         )}
       </div>

@@ -3,6 +3,14 @@
     {
       "source": "/api/:path*",
       "destination": "https://pd-chatbot-production-b767.up.railway.app/:path*"
+    },
+    {
+      "source": "/runs",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/runs/:runId",
+      "destination": "/index.html"
     }
   ]
 }

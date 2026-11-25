@@ -37,9 +37,67 @@ export interface Message {
   content: string
   sources?: Source[]
   messageId?: string
+  runId?: string
+  sessionId?: string
+  langfuseTraceUrl?: string
   patches?: PatchArtifact[]
   audio?: AudioArtifact[]
   steps?: AgentStep[]
+}
+
+export interface TokenUsage {
+  input?: number
+  output?: number
+  cache_read?: number
+  cache_write?: number
+  total?: number
+  [key: string]: number | undefined
+}
+
+export interface RunSummary {
+  run_id: string
+  session_id: string
+  question: string
+  interface: string
+  status: 'running' | 'completed' | 'failed' | 'refused' | string
+  query_type: string
+  answer: string
+  model: string
+  turns: number
+  tool_calls: number
+  total_tokens: number
+  cost_usd: number | null
+  latency_ms: number | null
+  stop_reason: string | null
+  budget_exceeded: string | null
+  refused: boolean
+  cached: boolean
+  langfuse_trace_id: string | null
+  langfuse_trace_url: string | null
+  created_at: string | null
+  completed_at: string | null
+}
+
+export interface StoredRunEvent {
+  seq: number
+  run_id: string
+  session_id: string
+  event_type:
+    | 'model_turn'
+    | 'tool_call'
+    | 'tool_result'
+    | 'sources'
+    | 'text_delta'
+    | 'text_reset'
+    | 'artifact'
+    | 'done'
+    | string
+  payload: Record<string, unknown>
+  created_at: string | null
+}
+
+export interface RunDetail extends RunSummary {
+  events: StoredRunEvent[]
 }
 
 export interface HistoryItem {

@@ -24,7 +24,14 @@ export type StreamEvent =
   | { type: 'artifact'; kind: 'pd_patch'; data: PatchArtifact }
   | { type: 'artifact'; kind: 'audio'; data: AudioArtifact }
   | { type: 'artifact'; kind: string; data: unknown }
-  | { type: 'done'; history: HistoryItem[]; message_id?: string | null }
+  | {
+      type: 'done'
+      history: HistoryItem[]
+      message_id?: string | null
+      run_id?: string | null
+      session_id?: string | null
+      langfuse_trace_url?: string | null
+    }
 
 function upsertByName<T extends { name: string }>(items: T[] | undefined, next: T): T[] {
   const list = items ?? []
@@ -121,6 +128,9 @@ export function applyStreamEvent(message: Message, event: StreamEvent): Message 
       return {
         ...message,
         messageId: event.message_id ?? undefined,
+        runId: event.run_id ?? undefined,
+        sessionId: event.session_id ?? undefined,
+        langfuseTraceUrl: event.langfuse_trace_url ?? undefined,
         steps: finalizeRunningSteps(message.steps, 'done'),
       }
     default:

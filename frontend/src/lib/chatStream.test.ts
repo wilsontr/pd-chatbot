@@ -99,13 +99,23 @@ describe('applyStreamEvent', () => {
         seconds: 2,
       },
     })
-    msg = applyStreamEvent(msg, { type: 'done', history: [], message_id: 'm2' })
+    msg = applyStreamEvent(msg, {
+      type: 'done',
+      history: [],
+      message_id: 'm2',
+      run_id: 'run-99',
+      session_id: 'sess-99',
+      langfuse_trace_url: 'https://cloud.langfuse.com/project/p/traces/t1',
+    })
 
     assert.equal(msg.content, 'Here is a 440 Hz patch.')
     assert.equal(msg.patches?.length, 1)
     assert.equal(msg.audio?.length, 1)
     assert.equal(msg.audio?.[0].name, 'sine')
     assert.equal(msg.messageId, 'm2')
+    assert.equal(msg.runId, 'run-99')
+    assert.equal(msg.sessionId, 'sess-99')
+    assert.equal(msg.langfuseTraceUrl, 'https://cloud.langfuse.com/project/p/traces/t1')
   })
 
   it('finalizes dangling running steps without mutating undefined steps', () => {
