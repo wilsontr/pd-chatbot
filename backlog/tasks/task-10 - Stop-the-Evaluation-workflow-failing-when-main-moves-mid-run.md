@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-25 02:44'
-updated_date: '2026-11-25 02:45'
+updated_date: '2026-11-25 02:52'
 labels:
   - infra
 dependencies: []
@@ -24,9 +24,9 @@ Evaluation runs 45527627711 and 45527867182 passed their quality gate, then fail
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Pytest runs before results are published
-- [ ] #2 A push to main during a run does not fail the run, and results are never published on top of code they did not measure
-- [ ] #3 A genuine push failure still fails the run
+- [x] #1 Pytest runs before results are published
+- [x] #2 A push to main during a run does not fail the run, and results are never published on top of code they did not measure
+- [x] #3 A genuine push failure still fails the run
 - [ ] #4 Pushes to main that change only Backlog or Markdown files do not start a paid evaluation
 <!-- AC:END -->
 
@@ -40,4 +40,6 @@ Evaluation runs 45527627711 and 45527867182 passed their quality gate, then fail
 
 <!-- SECTION:NOTES:BEGIN -->
 Publish script exercised against a local bare repo, 10 cases: plain, Markdown/Backlog/deep-Markdown moved, code moved, code then Markdown moved, unchanged, unreachable remote (fails), rejected push (fails), and a push landing between fetch and push (retries). Not yet run on GitHub: needs a push. Acceptance criteria stay unchecked until then.
+
+GitHub run 45535349267 on 3fdb54c: pytest ran before publishing (605 passed, 64 skipped) and the script published 8bc441e. AC 2 and 3 rest on the local bare-repo cases. AC 4 needs a Backlog-only push.
 <!-- SECTION:NOTES:END -->
