@@ -12,12 +12,34 @@ export interface PatchArtifact {
   patch: PdPatch
 }
 
+/** A rendered audio clip from a sandboxed Pd run, paired with a patch by name. */
+export interface AudioArtifact {
+  id: string
+  url: string
+  name: string
+  mime: string
+  seconds: number
+}
+
+/** One tool call and its result from an agent turn. */
+export interface AgentStep {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+  status: 'running' | 'done' | 'error'
+  summary?: string
+  chunkCount?: number
+  data?: Record<string, unknown>
+}
+
 export interface Message {
   role: 'user' | 'assistant'
   content: string
   sources?: Source[]
   messageId?: string
   patches?: PatchArtifact[]
+  audio?: AudioArtifact[]
+  steps?: AgentStep[]
 }
 
 export interface HistoryItem {

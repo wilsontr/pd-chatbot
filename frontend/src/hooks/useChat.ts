@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { applyStreamEvent, finalizeRunningSteps, type StreamEvent } from '../lib/chatStream'
 import type { Message, HistoryItem } from '../types'
 
 export function useChat() {
@@ -28,6 +29,20 @@ export function useChat() {
     abortRef.current = controller
 
     let hasStreamed = false
+    let sawDone = false
+
+    function updateAssistant(updater: (msg: Message) => Message) {
+      if (!hasStreamed) {
+        hasStreamed = true
+        setStreaming(true)
+        setMessages(prev => [...prev, updater({ role: 'assistant', content: '' })])
+      } else {
+        setMessages(prev => {
+          const last = prev[prev.length - 1]
+          return [...prev.slice(0, -1), updater(last)]
+        })
+      }
+    }
 
     try {
       const res = await fetch('/api/chat', {
@@ -46,7 +61,6 @@ export function useChat() {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let rawContent = ''
 
       while (true) {
         const { done, value } = await reader.read()
@@ -59,52 +73,52 @@ export function useChat() {
         for (const part of parts) {
           const line = part.trim()
           if (!line.startsWith('data: ')) continue
-          const event = JSON.parse(line.slice(6))
+          const event = JSON.parse(line.slice(6)) as StreamEvent
 
-          if (event.type === 'meta') {
-            hasStreamed = true
-            setStreaming(true)
-            setMessages(prev => [...prev, {
-              role: 'assistant' as const,
-              content: '',
-              sources: event.sources,
-            }])
-          } else if (event.type === 'chunk') {
-            rawContent += event.text
-            const content = rawContent
-            setMessages(prev => {
-              const last = prev[prev.length - 1]
-              return [...prev.slice(0, -1), { ...last, content }]
-            })
-          } else if (event.type === 'text_reset') {
-            // The text so far preceded a tool call, so it was not the answer.
-            rawContent = ''
-            setMessages(prev => {
-              const last = prev[prev.length - 1]
-              return [...prev.slice(0, -1), { ...last, content: '' }]
-            })
-          } else if (event.type === 'artifact' && event.kind === 'pd_patch') {
-            setMessages(prev => {
-              const last = prev[prev.length - 1]
-              return [...prev.slice(0, -1), { ...last, patches: [...(last.patches ?? []), event.data] }]
-            })
-          } else if (event.type === 'done') {
-            setMessages(prev => {
-              const last = prev[prev.length - 1]
-              return [...prev.slice(0, -1), { ...last, messageId: event.message_id }]
-            })
-            setChatHistory(event.history)
+          if (event.type === 'done') {
+            sawDone = true
+            updateAssistant(last => applyStreamEvent(last, event))
+            if (Array.isArray(event.history)) {
+              setChatHistory(event.history)
+            }
+          } else if (
+            event.type === 'meta' ||
+            event.type === 'chunk' ||
+            event.type === 'text_reset' ||
+            event.type === 'tool_call' ||
+            event.type === 'tool_result' ||
+            event.type === 'artifact'
+          ) {
+            updateAssistant(last => applyStreamEvent(last, event))
           }
         }
+      }
+
+      if (hasStreamed && !sawDone) {
+        setMessages(prev => {
+          const last = prev[prev.length - 1]
+          return [...prev.slice(0, -1), { ...last, steps: finalizeRunningSteps(last.steps, 'error') }]
+        })
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         setMessages(prev => prev.slice(0, hasStreamed ? -2 : -1))
       } else {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: 'Could not reach the API server. Please try again later.',
-        }])
+        setMessages(prev => {
+          const next = hasStreamed
+            ? [
+                ...prev.slice(0, -1),
+                { ...prev[prev.length - 1], steps: finalizeRunningSteps(prev[prev.length - 1].steps, 'error') },
+              ]
+            : prev
+          return [
+            ...next,
+            {
+              role: 'assistant',
+              content: 'Could not reach the API server. Please try again later.',
+            },
+          ]
+        })
       }
     } finally {
       abortRef.current = null

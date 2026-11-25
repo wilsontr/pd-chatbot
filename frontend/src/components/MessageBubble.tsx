@@ -2,6 +2,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
+import { AgentSteps } from './AgentSteps'
+import { PatchAudioPlayer } from './PatchAudioPlayer'
 import { PdPatchViewer } from './PdPatchViewer'
 import { submitFeedback } from '@/lib/auth'
 import type { Message } from '../types'
@@ -43,9 +45,31 @@ const markdownComponents: Components = {
   ),
 }
 
-export function MessageBubble({ message }: { message: Message }) {
+export function MessageBubble({
+  message,
+  isStreaming = false,
+}: {
+  message: Message
+  isStreaming?: boolean
+}) {
   const isUser = message.role === 'user'
   const [rating, setRating] = useState<'up' | 'down' | null>(null)
+
+  const hasSteps = !isUser && !!message.steps && message.steps.length > 0
+  const hasRunningStep = hasSteps && message.steps!.some(step => step.status === 'running')
+  const hasPatches = !!message.patches && message.patches.length > 0
+  const hasAudio = !!message.audio && message.audio.length > 0
+  const showBubble =
+    isUser ||
+    !hasSteps ||
+    message.content !== '' ||
+    hasPatches ||
+    hasAudio ||
+    (isStreaming && !hasRunningStep)
+
+  const audioByName = new Map((message.audio ?? []).map(item => [item.name, item]))
+  const patchNames = new Set((message.patches ?? []).map(item => item.name))
+  const unmatchedAudio = (message.audio ?? []).filter(item => !patchNames.has(item.name))
 
   async function handleFeedback(choice: 'up' | 'down') {
     if (rating || !message.messageId) return
@@ -56,29 +80,47 @@ export function MessageBubble({ message }: { message: Message }) {
   return (
     <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       <div className={`flex flex-col gap-2 max-w-[88%] ${isUser ? 'items-end' : 'items-start'}`}>
-        <div className={`rounded-xl px-4 py-2.5 text-sm leading-relaxed ${
-          isUser
-            ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
-            : 'bg-muted text-foreground prose-bubble'
-        }`}>
-          {isUser ? message.content : message.content === '' ? (
-            <span className="inline-flex gap-1 text-muted-foreground">
-              <span className="animate-bounce [animation-delay:0ms]">.</span>
-              <span className="animate-bounce [animation-delay:150ms]">.</span>
-              <span className="animate-bounce [animation-delay:300ms]">.</span>
-            </span>
-          ) : (
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-              {message.content}
-            </ReactMarkdown>
-          )}
-          {message.patches?.map(({ name, patch }) => (
-            <figure key={name} className="my-2">
-              <figcaption className="text-xs text-muted-foreground mb-1">{name}</figcaption>
-              <PdPatchViewer patch={patch} />
-            </figure>
-          ))}
-        </div>
+        {hasSteps && <AgentSteps steps={message.steps!} isStreaming={isStreaming} />}
+
+        {showBubble && (
+          <div className={`rounded-xl px-4 py-2.5 text-sm leading-relaxed ${
+            isUser
+              ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
+              : 'bg-muted text-foreground prose-bubble'
+          }`}>
+            {isUser ? message.content : message.content === '' ? (
+              isStreaming || (!hasPatches && !hasAudio) ? (
+                <span className="inline-flex gap-1 text-muted-foreground">
+                  <span className="animate-bounce [animation-delay:0ms]">.</span>
+                  <span className="animate-bounce [animation-delay:150ms]">.</span>
+                  <span className="animate-bounce [animation-delay:300ms]">.</span>
+                </span>
+              ) : null
+            ) : (
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                {message.content}
+              </ReactMarkdown>
+            )}
+            {message.patches?.map(({ name, patch }) => {
+              const audio = audioByName.get(name)
+              return (
+                <figure key={name} className="my-3">
+                  <figcaption className="text-xs text-muted-foreground mb-1">{name}</figcaption>
+                  <div className="flex flex-wrap items-start gap-3">
+                    <PdPatchViewer patch={patch} />
+                    {audio && <PatchAudioPlayer audio={audio} />}
+                  </div>
+                </figure>
+              )
+            })}
+            {unmatchedAudio.map(audio => (
+              <figure key={audio.id} className="my-3">
+                <figcaption className="text-xs text-muted-foreground mb-1">{audio.name}</figcaption>
+                <PatchAudioPlayer audio={audio} />
+              </figure>
+            ))}
+          </div>
+        )}
 
         {message.sources && message.sources.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-0.5">

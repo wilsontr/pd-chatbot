@@ -80,7 +80,13 @@ export default function App() {
         <div className="max-w-[816px] mx-auto px-4 py-8 space-y-6">
           {messages.length === 0 && <EmptyState onSuggest={handleSend} />}
 
-          {messages.map((msg, i) => <MessageBubble key={i} message={msg} />)}
+          {messages.map((msg, i) => (
+            <MessageBubble
+              key={i}
+              message={msg}
+              isStreaming={streaming && i === messages.length - 1}
+            />
+          ))}
 
           {loading && !streaming && (
             <div className="flex gap-3">

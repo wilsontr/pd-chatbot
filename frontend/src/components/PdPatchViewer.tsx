@@ -110,7 +110,7 @@ export function PdPatchViewer({ patch }: { patch: PdPatch }) {
   const objMap = new Map(patch.objects.map(o => [o.id, o]))
 
   return (
-    <div className="my-3">
+    <div className="min-w-0 max-w-full">
     <div className="overflow-x-auto rounded border border-black/20 inline-block max-w-full">
       <svg
         width={svgW}
