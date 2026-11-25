@@ -1,10 +1,10 @@
 ---
 id: TASK-6
 title: Migrate Railway deploy config from railway.json to IaC
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-23 20:50'
-updated_date: '2026-11-23 20:56'
+updated_date: '2026-11-25 01:45'
 labels:
   - infra
 dependencies: []
@@ -37,4 +37,12 @@ Branch claude/railway-iac-migration (commit 147e4f7) adds .railway/railway.ts (f
 Remaining (needs user go-ahead): railway config apply, then delete railway.json and merge to main.
 
 Applied 2026-11-23 via `railway config apply --plan` (the same 0/2/0 plan). Read-back shows the build/start/healthcheck settings on the service, and a re-plan reports no drift. The redeploy 09677a0f finished SUCCESS and /health returns 200. railway.json was removed in commit cbcda3d on claude/railway-iac-migration. Not yet pushed or merged: until it reaches main, deploys from main still read railway.json, which has the same values.
+
+Merged to main as 083d41f and deployed from 561887c (75d23a52, SUCCESS): manifest has NIXPACKS, build and start commands, /health and ON_FAILURE with no railway.json; /health 200; re-plan reports no drift.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Railway build and deploy settings now come from .railway/railway.ts; railway.json is gone. Verified by the deployed manifest, /health and a clean config plan after the merge.
+<!-- SECTION:FINAL_SUMMARY:END -->
