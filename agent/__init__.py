@@ -43,6 +43,10 @@ _LAZY: dict[str, str] = {
     "AgentAnswer": "agent.chat",
     "answer_question": "agent.chat",
     "stream_chat": "agent.chat",
+    # agent.guardrails
+    "INTERFACE_POLICIES": "agent.guardrails",
+    "ToolPolicy": "agent.guardrails",
+    "policy_for": "agent.guardrails",
     # agent.loop
     "AgentConfig": "agent.loop",
     "AgentLoop": "agent.loop",

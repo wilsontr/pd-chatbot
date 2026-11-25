@@ -8,9 +8,10 @@ identically in the pipeline and in the agent core.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import re
-from typing import Any
+from typing import Any, Collection, Iterable
 
 from .llm import sync_client
 from .observability import cost_from_usage, record_model_call, start_obs
@@ -25,15 +26,102 @@ _INJECTION_PATTERNS = [
     re.compile(r"you\s+are\s+(now\s+|no\s+longer\s+)?(a\s+|an\s+)?(?!.*?\bhelpful\b).{0,20}(assistant|chatbot|helper|ai)", re.IGNORECASE),
     re.compile(r"(override|disregard|forget)\s+(your\s+)?(instructions?|prompts?|rules?|system\s+prompt|guidelines?)", re.IGNORECASE),
     re.compile(r"system\s+(prompt|message|instruction)", re.IGNORECASE),
-    re.compile(r"(DAN|jailbreak|roleplay|developer\s*mode)", re.IGNORECASE),
+    # Match the DAN jailbreak token case-sensitively with word boundaries so
+    # ordinary words and names in the Pd manual (e.g. "Dan Wilcox") do not trip.
+    re.compile(r"\bDAN\b"),
+    re.compile(r"\b(jailbreak|roleplay|developer\s*mode)\b", re.IGNORECASE),
     re.compile(r"from\s+now\s+on\s+you\s+(are|will|must|should)", re.IGNORECASE),
     re.compile(r"(do\s+not|don't|never)\s+(follow|obey|use|reference)\s+(your\s+)?(instructions?|prompts?|rules?)", re.IGNORECASE),
 ]
 
 
-def check_prompt_injection(question: str) -> bool:
-    """Return True if the question contains known prompt-injection patterns."""
-    return any(p.search(question) for p in _INJECTION_PATTERNS)
+def check_prompt_injection(text: str) -> bool:
+    """Return True if ``text`` contains known prompt-injection patterns."""
+    return any(p.search(text) for p in _INJECTION_PATTERNS)
+
+
+def check_tool_output_injection(
+    content: str, chunks: Iterable[Chunk] = ()
+) -> bool:
+    """Return True if a tool's output or retrieved chunks contain injection patterns.
+
+    Tool outputs (documentation excerpts, sandbox console output from ``[print]``,
+    future external sources) are untrusted input to the model and must pass the
+    same injection check as user prompts.
+    """
+    if content and check_prompt_injection(content):
+        return True
+    for chunk in chunks:
+        text = chunk.get("text")
+        if isinstance(text, str) and text and check_prompt_injection(text):
+            return True
+    return False
+
+
+# --- Per-interface tool allowlists -------------------------------------------
+
+DOCS_TOOLS: frozenset[str] = frozenset({"search_docs"})
+PATCH_WRITE_TOOLS: frozenset[str] = frozenset({"write_patch"})
+SANDBOX_TOOLS: frozenset[str] = frozenset({"run_patch", "analyze_audio"})
+ALL_CORE_TOOLS: frozenset[str] = DOCS_TOOLS | PATCH_WRITE_TOOLS | SANDBOX_TOOLS
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    """Declares which tools an interface may invoke and which require approval."""
+
+    interface: str
+    allowed: frozenset[str]
+    require_approval: frozenset[str] = frozenset()
+
+    def check(
+        self, tool_name: str, *, approved: Collection[str] = ()
+    ) -> tuple[bool, str]:
+        """Return ``(permitted, reason)`` for one tool invocation."""
+        if tool_name not in self.allowed:
+            return (
+                False,
+                f"The tool {tool_name!r} is not allowed on the {self.interface} interface.",
+            )
+        if tool_name in self.require_approval and tool_name not in approved:
+            return (
+                False,
+                f"The tool {tool_name!r} requires explicit approval on the "
+                f"{self.interface} interface before it can run.",
+            )
+        return (True, "")
+
+    def permitted_names(self, *, approved: Collection[str] = ()) -> frozenset[str]:
+        """Subset of ``allowed`` tools currently executable without further approval."""
+        approved_set = frozenset(approved)
+        return frozenset(
+            name for name in self.allowed
+            if name not in self.require_approval or name in approved_set
+        )
+
+
+INTERFACE_POLICIES: dict[str, ToolPolicy] = {
+    "web": ToolPolicy(interface="web", allowed=ALL_CORE_TOOLS),
+    "cli": ToolPolicy(interface="cli", allowed=ALL_CORE_TOOLS),
+    # Sandbox runs from Slack cost compute and can be triggered by any channel
+    # member, so they require explicit approval before executing.
+    "slack": ToolPolicy(
+        interface="slack",
+        allowed=ALL_CORE_TOOLS,
+        require_approval=SANDBOX_TOOLS,
+    ),
+    "mcp": ToolPolicy(interface="mcp", allowed=ALL_CORE_TOOLS),
+    "eval": ToolPolicy(interface="eval", allowed=ALL_CORE_TOOLS),
+}
+
+
+def policy_for(interface: str) -> ToolPolicy:
+    """Return the declared ``ToolPolicy`` for ``interface``."""
+    policy = INTERFACE_POLICIES.get(interface)
+    if policy is None:
+        known = ", ".join(sorted(INTERFACE_POLICIES))
+        raise ValueError(f"Unknown interface {interface!r} (known: {known})")
+    return policy
 
 
 # Faithfulness score (1-5, LLM-as-judge) at or below this is treated as a real hallucination

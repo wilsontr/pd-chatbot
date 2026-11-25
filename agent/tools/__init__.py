@@ -80,6 +80,13 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools)
 
+    def filtered(self, allowed: Iterable[str]) -> "ToolRegistry":
+        """Return a new registry restricted to tool names in ``allowed``."""
+        allow_set = set(allowed)
+        return ToolRegistry(
+            tool for name, tool in self._tools.items() if name in allow_set
+        )
+
     def __contains__(self, name: object) -> bool:
         return name in self._tools
 

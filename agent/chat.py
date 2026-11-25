@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import AsyncIterator
+from typing import AsyncIterator, Collection
 
 import newrelic.agent
 
@@ -25,8 +25,10 @@ from .events import AgentEvent, Artifact, Done, Sources, TextDelta, TextReset, T
 from .guardrails import (
     FAITHFULNESS_RETRY_THRESHOLD,
     LOW_FAITHFULNESS_DISCLAIMER,
+    ToolPolicy,
     check_faithfulness,
     check_prompt_injection,
+    policy_for,
 )
 from .history import HISTORY_MAX_OUTGOING, compress_history_async
 from .llm import AnthropicModelClient, ModelClient
@@ -70,6 +72,7 @@ class AgentAnswer:
     tool_errors: int = 0
     recovered_errors: int = 0
     unresolved_errors: int = 0
+    budget_exceeded: str | None = None
     stop_reason: str | None = None
     usage: dict[str, int] = field(default_factory=dict)
     prose: str = ""
@@ -79,28 +82,50 @@ class AgentAnswer:
 
 
 def default_registry(
-    workspace: PatchWorkspace | None = None, *, execution: bool | None = None
+    workspace: PatchWorkspace | None = None,
+    *,
+    execution: bool | None = None,
+    interface: str = "web",
+    policy: ToolPolicy | None = None,
+    approved_tools: Collection[str] = (),
 ) -> ToolRegistry:
-    """Documentation search plus the patch tools.
+    """Documentation search plus the patch tools permitted for ``interface``.
 
     ``execution`` adds the tools that run patches; by default it follows whether
-    a sandbox backend is configured.
+    a sandbox backend is configured, and is further constrained by the
+    interface's ``ToolPolicy``.
     """
     if execution is None:
         execution = execution_enabled()
-    return ToolRegistry([
+    effective_policy = policy or policy_for(interface)
+    registry = ToolRegistry([
         *default_tools(),
         *patch_tools(workspace or PatchWorkspace(), execution=execution),
     ])
+    return registry.filtered(effective_policy.allowed)
 
 
-def default_config(*, execution: bool | None = None, **overrides) -> AgentConfig:
+def default_config(
+    *,
+    execution: bool | None = None,
+    interface: str = "web",
+    policy: ToolPolicy | None = None,
+    approved_tools: Collection[str] = (),
+    **overrides,
+) -> AgentConfig:
     if execution is None:
         execution = execution_enabled()
+    effective_policy = policy or policy_for(interface)
+    approved = frozenset(approved_tools)
+    can_execute = execution and bool(
+        effective_policy.permitted_names(approved=approved) & {"run_patch", "analyze_audio"}
+    )
     return AgentConfig(**{
-        "system_prompt": agent_system_prompt(execution=execution),
+        "system_prompt": agent_system_prompt(execution=can_execute),
         # Writing, running, analysing and revising a patch takes more turns.
-        "max_turns": 9 if execution else 6,
+        "max_turns": 9 if can_execute else 6,
+        "tool_policy": effective_policy,
+        "approved_tools": approved,
         **overrides,
     })
 
@@ -121,6 +146,9 @@ async def answer_question(
     scope_note: str | None = None,
     execution: bool | None = None,
     workspace: PatchWorkspace | None = None,
+    interface: str = "eval",
+    policy: ToolPolicy | None = None,
+    approved_tools: Collection[str] = (),
 ) -> AgentAnswer:
     """Run the loop to completion and return the answer.
 
@@ -131,8 +159,14 @@ async def answer_question(
     workspace = workspace or PatchWorkspace()
     loop = AgentLoop(
         client or AnthropicModelClient(),
-        tools or default_registry(workspace, execution=execution),
-        config or default_config(execution=execution),
+        tools or default_registry(
+            workspace, execution=execution, interface=interface,
+            policy=policy, approved_tools=approved_tools,
+        ),
+        config or default_config(
+            execution=execution, interface=interface,
+            policy=policy, approved_tools=approved_tools,
+        ),
     )
     async for _event in loop.stream(
         question, history=history, scope_note=scope_note
@@ -154,6 +188,7 @@ async def answer_question(
         tool_errors=state.tool_errors,
         recovered_errors=state.recovered_errors,
         unresolved_errors=state.unresolved_errors,
+        budget_exceeded=state.budget_exceeded,
         stop_reason=state.stop_reason,
         usage=dict(state.usage),
     )
@@ -167,6 +202,9 @@ async def stream_chat(
     tools: ToolRegistry | None = None,
     config: AgentConfig | None = None,
     workspace: PatchWorkspace | None = None,
+    interface: str = "web",
+    policy: ToolPolicy | None = None,
+    approved_tools: Collection[str] = (),
 ) -> AsyncIterator[AgentEvent]:
     """Answer one question, yielding the typed event stream ending in ``done``."""
     history = list(history or [])
@@ -263,8 +301,13 @@ async def stream_chat(
         workspace = workspace or PatchWorkspace()
         loop = AgentLoop(
             client or AnthropicModelClient(),
-            tools or default_registry(workspace),
-            config or default_config(),
+            tools or default_registry(
+                workspace, interface=interface, policy=policy,
+                approved_tools=approved_tools,
+            ),
+            config or default_config(
+                interface=interface, policy=policy, approved_tools=approved_tools,
+            ),
         )
         streamed: list[str] = []
         rejected_patch = False
@@ -349,7 +392,7 @@ async def stream_chat(
             answer += LOW_FAITHFULNESS_DISCLAIMER
             yield TextDelta(LOW_FAITHFULNESS_DISCLAIMER)
 
-        extend_history = bool(state.chunks)
+        extend_history = bool(state.chunks) and not state.budget_exceeded
         new_history = (
             history + [
                 {"role": "user", "content": question},
@@ -357,13 +400,15 @@ async def stream_chat(
             ]
             if extend_history else history
         )
-        cache.put(
-            question, answer, list(state.chunks), query_type, extend_history,
-            patches=patches, audio=audio,
-        )
+        if not state.budget_exceeded:
+            cache.put(
+                question, answer, list(state.chunks), query_type, extend_history,
+                patches=patches, audio=audio,
+            )
 
         root_meta.update({
             "cache": "miss",
+            "interface": interface,
             "scope": classification.get("scope"),
             "query_type": query_type,
             "turns": state.turns,
@@ -371,6 +416,9 @@ async def stream_chat(
             "retrieval_calls": state.retrieval_calls,
             "retrieved_chunks": len(state.chunks),
             "stop_reason": state.stop_reason,
+            "budget_exceeded": state.budget_exceeded,
+            "disallowed_tool_calls": state.disallowed_tool_calls,
+            "blocked_tool_outputs": state.blocked_tool_outputs,
             "pd_patch_failed": patch_failed,
             "patches": len(patches),
             "patch_runs": workspace.runs,
@@ -384,6 +432,7 @@ async def stream_chat(
             turns=state.turns,
             tool_calls=state.tool_calls,
             patch_failed=patch_failed,
+            budget_exceeded=state.budget_exceeded,
             patches=patches,
         )
     finally:

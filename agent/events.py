@@ -139,6 +139,7 @@ class Done:
     refused: bool = False
     cached: bool = False
     patch_failed: bool = False
+    budget_exceeded: str | None = None
     patches: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -152,6 +153,7 @@ class Done:
             "refused": self.refused,
             "cached": self.cached,
             "patch_failed": self.patch_failed,
+            **({"budget_exceeded": self.budget_exceeded} if self.budget_exceeded else {}),
         }
 
 

@@ -155,7 +155,7 @@ async def chat_endpoint(request: Request, req: ChatRequest):
         final_answer = ""
         sources: list[dict] = []
         query_type = ""
-        async for event in stream_chat(req.message, history_dicts):
+        async for event in stream_chat(req.message, history_dicts, interface="web"):
             if isinstance(event, Sources):
                 # The browser creates the assistant message on `meta`, so this
                 # frame must come before the first `chunk` (the core guarantees it).
