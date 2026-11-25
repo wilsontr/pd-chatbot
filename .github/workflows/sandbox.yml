@@ -1,0 +1,29 @@
+name: Sandbox
+
+on:
+  push:
+    branches: [main]
+    paths: ['sandbox/**', 'tests/test_sandbox.py', '.github/workflows/sandbox.yml']
+  pull_request:
+    branches: [main]
+    paths: ['sandbox/**', 'tests/test_sandbox.py', '.github/workflows/sandbox.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest
+      - name: Build the image
+        run: docker build -t pd-sandbox sandbox/
+      - name: Test it
+        env:
+          PD_SANDBOX_REQUIRED: '1'
+        run: python -m pytest tests/test_sandbox.py -v
