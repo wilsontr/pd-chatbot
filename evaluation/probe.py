@@ -65,17 +65,20 @@ async def _run_agent(
     model: str = ANSWER_MODEL,
 ) -> tuple[str, list[dict[str, Any]], list[ToolStep], int]:
     """Run one entry through the same loop the app and the eval use."""
-    from agent.chat import default_registry
+    from agent.chat import default_config, default_registry
     from agent.events import ToolCall, ToolResult
     from agent.llm import AnthropicModelClient
-    from agent.loop import AgentConfig, AgentLoop
-    from agent.prompt import AGENT_SYSTEM_PROMPT
+    from agent.loop import AgentLoop
+    from agent.patch_counts import repair_patch
+    from agent.patches import append_patches
+    from agent.workspace import PatchWorkspace
 
-    config = AgentConfig(
-        model=model,
-        system_prompt=system_prompt or AGENT_SYSTEM_PROMPT,
+    overrides = {"system_prompt": system_prompt} if system_prompt else {}
+    config = default_config(execution=False, model=model, **overrides)
+    workspace = PatchWorkspace()
+    loop = AgentLoop(
+        AnthropicModelClient(), default_registry(workspace, execution=False), config
     )
-    loop = AgentLoop(AnthropicModelClient(), default_registry(), config)
 
     steps: list[ToolStep] = []
     by_id: dict[str, ToolStep] = {}
@@ -96,9 +99,9 @@ async def _run_agent(
     # Same canonicalisation as agent.chat.answer_question (the path the eval and
     # the app use), so a probe measures the shipped answer rather than the raw
     # model text. The loop itself stays free of docs/patch policy.
-    from agent.patch_counts import repair_patch_counts
-
-    answer, _repairs = repair_patch_counts(state.answer, list(state.chunks))
+    for item in workspace.entries.values():
+        item.patch = repair_patch(item.patch, list(state.chunks))
+    answer = append_patches(state.answer, workspace.patches())
     return answer, list(state.chunks), steps, state.turns
 
 

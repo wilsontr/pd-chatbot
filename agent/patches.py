@@ -1,6 +1,10 @@
 """pd-patch block handling: validate, canonicalise, strip for history.
 
-The model emits patch diagrams as fenced ```pd-patch JSON blocks inside its prose.
+Used by the pipeline baseline (``rag.py``); the agent writes patches with the
+``write_patch`` tool. ``append_patches`` is the text form of an agent answer plus
+its patches, for storage and for judges that only read text.
+
+The pipeline model emits patch diagrams as fenced ```pd-patch JSON blocks inside its prose.
 These helpers extract them, validate them against the Pydantic schema, and either
 canonicalise the JSON (so the frontend gets a stable shape) or replace a
 malformed block with a placeholder. Validation failure is reported through a
@@ -12,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any, Iterable
 
 import newrelic.agent
 
@@ -90,11 +95,12 @@ def validate_and_canonicalize_blocks(text: str) -> tuple[str, bool]:
     return result, had_failure
 
 
-def canonical_patches(text: str) -> list[dict]:
-    """Validated patches in ``text``, ready to publish as artifacts."""
-    patches = []
-    for raw_json, _ in extract_pd_patches(text):
-        patch = validate_patch(raw_json)
-        if patch is not None:
-            patches.append(patch.model_dump())
-    return patches
+def append_patches(answer: str, patches: Iterable[dict[str, Any]]) -> str:
+    """The answer as text with each patch written after it."""
+    blocks = [
+        "```pd-patch\n"
+        + json.dumps(item["patch"], separators=(",", ":"), ensure_ascii=False)
+        + "\n```"
+        for item in patches
+    ]
+    return "\n\n".join([answer, *blocks])

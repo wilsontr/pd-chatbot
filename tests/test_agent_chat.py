@@ -1,6 +1,6 @@
 """Tests for request orchestration over the agent loop (TASK-5.1).
 
-The cache, the scope gate, pd-patch canonicalisation and the faithfulness guard
+The cache, the scope gate, patch artifacts and the faithfulness guard
 are request-level concerns; these tests run them with a scripted model client so
 they need neither an API key nor the Chroma index.
 """
@@ -19,6 +19,8 @@ from agent import cache, chat
 from agent.events import Artifact, Done, Sources, TextDelta, ToolCall, ToolResult
 from agent.llm import ModelDelta, ModelTurn, ToolCallRequest
 from agent.tools import ToolOutcome, ToolRegistry, ToolSpec
+from agent.tools.patch import WritePatchTool
+from agent.workspace import PatchWorkspace
 
 CHUNK = {
     "id": "parent-1",
@@ -45,6 +47,17 @@ def clean_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+OSC_OBJECTS = [
+    {"id": "0", "type": "obj", "text": "osc~ 440", "inlets": 2, "outlets": 1},
+]
+
+
+def write_turn(objects, connections=()):
+    return {"tool_calls": [{"id": "w1", "name": "write_patch", "input": {
+        "name": "demo", "objects": objects, "connections": list(connections),
+    }}]}
 
 
 class StubClient:
@@ -92,12 +105,13 @@ class StubTool:
 TOOLS = ToolRegistry([StubTool()])
 
 
-def drain(question: str, history=None, *, client=None, tools=None) -> list[Any]:
+def drain(question: str, history=None, *, client=None, tools=None, workspace=None) -> list[Any]:
     async def go():
         return [
             e
             async for e in chat.stream_chat(
-                question, history, client=client, tools=tools or TOOLS
+                question, history, client=client, tools=tools or TOOLS,
+                workspace=workspace,
             )
         ]
 
@@ -224,30 +238,42 @@ class TestEventStream:
         assert sources < first_text
         assert isinstance(events[-1], Done)
 
-    def test_valid_pd_patch_is_emitted_as_an_artifact(self):
-        patch_json = (
-            '{"objects": [{"id": "0", "type": "obj", "text": "osc~ 440", '
-            '"inlets": 2, "outlets": 1}], "connections": []}'
-        )
-        text = f"Use this:\n```pd-patch\n{patch_json}\n```"
+    def test_written_patch_is_emitted_as_an_artifact(self):
+        workspace = PatchWorkspace()
         with patch.object(chat, "classify_query", lambda q, h: IN_SCOPE), \
              patch.object(chat, "check_faithfulness", lambda *a, **k: None):
-            events = drain("Show me osc~", client=StubClient([answer_turn(text)]))
+            events = drain(
+                "Show me osc~",
+                client=StubClient([write_turn(OSC_OBJECTS), answer_turn("Here it is.")]),
+                tools=ToolRegistry([WritePatchTool(workspace)]), workspace=workspace,
+            )
 
         artifact = next(e for e in events if isinstance(e, Artifact))
         assert artifact.kind == "pd_patch"
+        assert artifact.data["name"] == "demo"
         assert artifact.data["patch"]["objects"][0]["text"] == "osc~ 440"
         assert events[-1].patch_failed is False
+        assert events[-1].answer == "Here it is."
+        assert events[-1].patches == (artifact.data,)
 
-    def test_invalid_pd_patch_is_removed_and_flagged(self):
-        text = "Try this:\n```pd-patch\n{not json}\n```"
+        # A cache hit replays the diagram too.
+        with patch.object(chat, "classify_query", lambda q, h: IN_SCOPE):
+            again = drain("Show me osc~", client=StubClient([]))
+        assert again[-1].cached
+        assert [e.data for e in again if isinstance(e, Artifact)] == [artifact.data]
+
+    def test_patch_that_is_never_valid_is_flagged(self):
+        workspace = PatchWorkspace()
         with patch.object(chat, "classify_query", lambda q, h: IN_SCOPE), \
              patch.object(chat, "check_faithfulness", lambda *a, **k: None):
-            events = drain("Show me a patch", client=StubClient([answer_turn(text)]))
+            events = drain(
+                "Show me a patch",
+                client=StubClient([write_turn([]), answer_turn("Sorry.")]),
+                tools=ToolRegistry([WritePatchTool(workspace)]), workspace=workspace,
+            )
 
         assert not any(isinstance(e, Artifact) for e in events)
         assert events[-1].patch_failed is True
-        assert "[patch diagram]" in events[-1].answer
 
     def test_low_faithfulness_appends_a_visible_disclaimer(self):
         with patch.object(chat, "classify_query", lambda q, h: IN_SCOPE), \
@@ -325,47 +351,37 @@ class TestPatchCountRepair:
     def _tools(self):
         return ToolRegistry([self.SnapshotTool()])
 
-    def _patch_from(self, text: str) -> dict:
-        raw = text.split("```pd-patch")[1].split("```")[0].strip()
-        return json.loads(raw)
+    def _run_args(self):
+        workspace = PatchWorkspace()
+        return {
+            "client": StubClient([
+                tool_turn(), write_turn(**json.loads(self.WIRED_PATCH)), answer_turn("Done."),
+            ]),
+            "tools": self._tools().add(WritePatchTool(workspace)),
+            "workspace": workspace,
+        }
 
     def test_stream_path_emits_the_documented_count(self):
-        text = f"Use snapshot~:\n```pd-patch\n{self.WIRED_PATCH}\n```"
         with patch.object(chat, "classify_query", lambda q, h: IN_SCOPE), \
              patch.object(chat, "check_faithfulness", lambda *a, **k: None):
-            events = drain(
-                "How do I use snapshot~?",
-                client=StubClient([tool_turn(), answer_turn(text)]),
-                tools=self._tools(),
-            )
+            events = drain("How do I use snapshot~?", **self._run_args())
 
         artifact = next(e for e in events if isinstance(e, Artifact))
         snapshot = next(
             o for o in artifact.data["patch"]["objects"] if o["text"] == "snapshot~"
         )
         assert snapshot["inlets"] == 1
-        # The Done answer carries the repaired JSON, not the model's raw count.
-        done_snapshot = next(
-            o
-            for o in self._patch_from(events[-1].answer)["objects"]
-            if o["text"] == "snapshot~"
-        )
-        assert done_snapshot["inlets"] == 1
 
     def test_eval_path_repairs_patch_counts_too(self):
         # answer_question is what the generation eval scores; it must ship the
         # same canonical diagram as the serving path.
-        text = f"Use snapshot~:\n```pd-patch\n{self.WIRED_PATCH}\n```"
         result = asyncio.run(
-            chat.answer_question(
-                "How do I use snapshot~?",
-                client=StubClient([tool_turn(), answer_turn(text)]),
-                tools=self._tools(),
-            )
+            chat.answer_question("How do I use snapshot~?", **self._run_args())
         )
-        patch = self._patch_from(result.answer)
-        snapshot = next(o for o in patch["objects"] if o["text"] == "snapshot~")
-        assert snapshot["inlets"] == 1
+        objects = result.patches[0]["patch"]["objects"]
+        assert next(o for o in objects if o["text"] == "snapshot~")["inlets"] == 1
+        assert result.prose == "Done."
+        assert '"snapshot~","inlets":1' in result.answer
 
 
 class TestInterfaceIndependence:

@@ -159,13 +159,13 @@ def _run_agent_tool(entry: GoldenEntry) -> RetrievalResult:
     call its tools, and the chunks it asked for are scored. That measures the
     model's query choice without paying for a full answer per entry.
     """
-    from agent.chat import answer_question
-    from agent.loop import AgentConfig
+    from agent.chat import answer_question, default_config
 
     result = asyncio.run(answer_question(
         entry.question,
         entry.history,
-        config=AgentConfig(max_turns=1, force_final_answer=False),
+        config=default_config(execution=False, max_turns=1, force_final_answer=False),
+        execution=False,
     ))
     return RetrievalResult(
         entry.id,

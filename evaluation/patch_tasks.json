@@ -1,0 +1,18 @@
+[
+ {"id":"p_01","question":"Build a patch that plays a 440 Hz sine wave at half amplitude on both channels as soon as it is opened with audio on.","spec":{"hz":440,"peak":[0.45,0.55],"stereo":true}},
+ {"id":"p_02","question":"Build a patch that mixes a 300 Hz and a 450 Hz sine wave equally and plays them without clipping as soon as it is opened.","spec":{"peaks_hz":[300,450],"max_clipped":0}},
+ {"id":"p_03","question":"Build a simple FM synthesis patch: a 400 Hz carrier modulated by a 100 Hz sine, playing as soon as it is opened, without clipping.","spec":{"peaks_hz":[300,500],"max_clipped":0}},
+ {"id":"p_04","question":"Build a ring modulator patch that multiplies a 500 Hz sine by an 80 Hz sine and plays the result as soon as it is opened.","spec":{"peaks_hz":[420,580],"absent_hz":[500]}},
+ {"id":"p_05","question":"Build a patch that plays white noise through a low-pass filter with a 500 Hz cutoff as soon as it is opened.","spec":{"centroid":[50,4500]}},
+ {"id":"p_06","question":"Build a patch that, when opened, plays one 330 Hz note that fades smoothly to silence over one second.","spec":{"segment_hz":{"0":330},"decays":true}},
+ {"id":"p_07","question":"Build a patch that plays a 110 Hz sawtooth wave with no DC offset and no clipping as soon as it is opened.","spec":{"peaks_hz":[110,220,330],"max_dc":0.02,"max_clipped":0}},
+ {"id":"p_08","question":"Build a patch that, when opened, sweeps a sine oscillator from 200 Hz to 800 Hz over two seconds.","spec":{"segment_hz":{"0":238,"7":762},"segment_tol":60}},
+ {"id":"p_09","question":"Build a patch where a number box sets the pitch of a sine oscillator as a MIDI note number, so entering 69 plays 440 Hz.","spec":{"inputs":[{"types":["floatatom","nbx"],"value":"69","at_ms":20}],"segment_hz":{"4":440}}},
+ {"id":"p_10","question":"Build a patch that, when opened, counts up from 0 by one every 200 milliseconds and prints each number to the Pd window.","spec":{"prints":["0","1","2","3","4"]}},
+ {"id":"p_11","question":"Build a patch that, when opened, plays a short sound burst under 200 ms long, followed by a single echo of it one second later, using a delay line.","spec":{"loud_segments":[0,4],"quiet_segments":[2,6]}},
+ {"id":"p_12","question":"Build a patch that plays a 440 Hz sine in the left channel only and a 660 Hz sine in the right channel only, as soon as it is opened.","spec":{"channel_hz":[440,660]}},
+ {"id":"p_13","question":"Build a patch that plays white noise through a band-pass filter centred on 1000 Hz with a Q of 20 as soon as it is opened.","spec":{"centroid":[750,1700]}},
+ {"id":"p_14","question":"Build a wavetable oscillator patch: fill a table with one cycle of a sine wave when the patch opens and play it at 220 Hz.","spec":{"hz":220}},
+ {"id":"p_15","question":"Build a patch with a toggle that starts and stops a metronome at 250 ms, with each tick playing a short 1000 Hz blip.","spec":{"inputs":[{"types":["tgl"],"value":"1","at_ms":20}],"hz":1000,"hz_tol":40,"loud_segments":[0,3,6]}},
+ {"id":"p_16","question":"Build a tremolo patch: a 300 Hz sine whose level goes up and down 5 times per second, playing as soon as it is opened without clipping.","spec":{"hz":300,"tremolo_hz":5,"max_clipped":0}}
+]

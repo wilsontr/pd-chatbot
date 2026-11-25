@@ -10,6 +10,9 @@ Event order for a normal request::
 
     tool_call -> tool_result -> sources -> text_delta* -> artifact* -> done
 
+``text_reset`` may follow a ``text_delta``: the model wrote text and then called a
+tool, so adapters discard all answer text so far.
+
 ``sources`` is always emitted before the first ``text_delta``, because every
 adapter needs to attach citations to the answer before it starts showing it.
 ``done`` is always last and carries the final answer and the new history.
@@ -32,6 +35,16 @@ class TextDelta:
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": self.type, "text": self.text}
+
+
+@dataclass(frozen=True)
+class TextReset:
+    """Discard all answer text so far: it was written before a tool call."""
+
+    type: ClassVar[str] = "text_reset"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self.type}
 
 
 @dataclass(frozen=True)
@@ -97,7 +110,12 @@ class Sources:
 
 @dataclass(frozen=True)
 class Artifact:
-    """A structured output of the run (currently: a validated pd-patch)."""
+    """A structured output of the run.
+
+    ``pd_patch``: ``{"name", "patch"}``. ``audio``: ``{"name", "id", "url", "mime",
+    "seconds"}``, where ``name`` is the patch that made it and the bytes are in
+    ``agent.artifacts`` under ``id``.
+    """
 
     type: ClassVar[str] = "artifact"
     kind: str
@@ -121,6 +139,7 @@ class Done:
     refused: bool = False
     cached: bool = False
     patch_failed: bool = False
+    patches: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         # The SSE adapter historically sent only {"type", "history"}; keep the
@@ -136,4 +155,4 @@ class Done:
         }
 
 
-AgentEvent = TextDelta | ToolCall | ToolResult | Sources | Artifact | Done
+AgentEvent = TextDelta | TextReset | ToolCall | ToolResult | Sources | Artifact | Done

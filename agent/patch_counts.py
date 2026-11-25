@@ -16,9 +16,9 @@ variable arity marker (``n:``/``n |``/"number depends", e.g. ``pack``,
 excerpts do not cover and patches whose connections would fall outside the
 repaired count.
 
-The repair changes only the pd-patch JSON, never the prose, and it is applied on
-both the serving path (``agent.chat.stream_chat``) and the eval path
-(``agent.chat.answer_question``) so the measured answer is the shipped one.
+The repair changes only the patch, never the prose. ``repair_patch`` is applied on
+the agent's serving and eval paths, so the measured answer is the shipped one;
+``repair_patch_counts`` does the same for the pipeline's fenced blocks.
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 import newrelic.agent
+
+from pd_schema import PdPatch
 
 from .patches import extract_pd_patches
 
@@ -168,6 +170,36 @@ def _connection_out_of_range(
     return False
 
 
+def _repair_objects(data: dict[str, Any], index: Mapping[str, DocumentedCounts]) -> bool:
+    """Correct counts in one patch's JSON in place; True if anything changed."""
+    changed = False
+    for obj in data["objects"]:
+        if not isinstance(obj, dict) or obj.get("type") != "obj":
+            continue
+        counts = index.get(_object_name(obj.get("text")))
+        if counts is None:
+            continue
+        for field, documented in (
+            ("inlets", counts.inlets),
+            ("outlets", counts.outlets),
+        ):
+            current = obj.get(field)
+            if documented is None or current == documented:
+                continue
+            if not isinstance(current, int):
+                continue
+            if _connection_out_of_range(
+                data, str(obj.get("id")), field, documented
+            ):
+                continue
+            obj[field] = documented
+            changed = True
+            newrelic.agent.record_custom_metric(
+                "Custom/PdPatch/CountRepaired", 1
+            )
+    return changed
+
+
 def repair_patch_counts(
     text: str, chunks: Iterable[Mapping[str, Any]]
 ) -> tuple[str, int]:
@@ -191,31 +223,7 @@ def repair_patch_counts(
         if not isinstance(data, dict) or not isinstance(data.get("objects"), list):
             continue
 
-        changed = False
-        for obj in data["objects"]:
-            if not isinstance(obj, dict) or obj.get("type") != "obj":
-                continue
-            counts = index.get(_object_name(obj.get("text")))
-            if counts is None:
-                continue
-            for field, documented in (
-                ("inlets", counts.inlets),
-                ("outlets", counts.outlets),
-            ):
-                current = obj.get(field)
-                if documented is None or current == documented:
-                    continue
-                if not isinstance(current, int):
-                    continue
-                if _connection_out_of_range(
-                    data, str(obj.get("id")), field, documented
-                ):
-                    continue
-                obj[field] = documented
-                changed = True
-                newrelic.agent.record_custom_metric(
-                    "Custom/PdPatch/CountRepaired", 1
-                )
+        changed = _repair_objects(data, index)
 
         if changed:
             replacement = (
@@ -227,3 +235,11 @@ def repair_patch_counts(
     if repairs:
         logger.info("repaired pd-patch counts in %d block(s)", repairs)
     return result, repairs
+
+
+def repair_patch(patch: PdPatch, chunks: Iterable[Mapping[str, Any]]) -> PdPatch:
+    """``patch`` with counts that contradict the retrieved reference corrected."""
+    data = patch.model_dump()
+    if not _repair_objects(data, documented_counts_by_object(chunks)):
+        return patch
+    return PdPatch.model_validate(data)

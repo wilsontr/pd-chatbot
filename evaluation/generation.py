@@ -156,16 +156,14 @@ def _agent_answer(
     system_prompt: str | None = None,
 ):
     """Run one golden entry through the agent loop (blocking)."""
-    from agent.chat import answer_question
-    from agent.loop import AgentConfig
-    from agent.prompt import AGENT_SYSTEM_PROMPT
+    from agent.chat import answer_question, default_config
 
-    config = AgentConfig(
-        model=model,
-        system_prompt=system_prompt or AGENT_SYSTEM_PROMPT,
-    )
+    # Without execution: these are documentation questions, and the score should
+    # not depend on whether the machine has a sandbox. See patch_eval for that.
+    overrides = {"system_prompt": system_prompt} if system_prompt else {}
+    config = default_config(execution=False, model=model, **overrides)
     return asyncio.run(
-        answer_question(entry.question, entry.history, config=config)
+        answer_question(entry.question, entry.history, config=config, execution=False)
     )
 
 

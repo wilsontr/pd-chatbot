@@ -2,32 +2,10 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
 import { PdPatchViewer } from './PdPatchViewer'
 import { submitFeedback } from '@/lib/auth'
 import type { Message } from '../types'
 import type { Components } from 'react-markdown'
-
-function PatchDiagramSkeleton() {
-  return (
-    <div className="rounded border border-border/50 bg-background/40 p-3 my-2 space-y-2">
-      <div className="flex gap-4 justify-center">
-        <Skeleton className="h-7 w-20" />
-        <Skeleton className="h-7 w-24" />
-        <Skeleton className="h-7 w-16" />
-      </div>
-      <div className="flex justify-center">
-        <Skeleton className="h-3 w-px mx-8" />
-        <Skeleton className="h-3 w-px mx-8" />
-      </div>
-      <div className="flex gap-6 justify-center">
-        <Skeleton className="h-7 w-20" />
-        <Skeleton className="h-7 w-20" />
-      </div>
-      <p className="text-xs text-muted-foreground/60 text-center pt-1">Generating diagram…</p>
-    </div>
-  )
-}
 
 const markdownComponents: Components = {
   table: ({ children }) => (
@@ -48,12 +26,6 @@ const markdownComponents: Components = {
   ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
   code: ({ children, className }) => {
-    if (className === 'language-pd-patch') {
-      return <PdPatchViewer json={String(children).trim()} />
-    }
-    if (className === 'language-loading-patch') {
-      return <PatchDiagramSkeleton />
-    }
     const isBlock = !!className || String(children).includes('\n')
     return isBlock ? (
       <code className="block bg-background/60 rounded px-3 py-2 my-2 text-xs font-mono overflow-x-auto whitespace-pre">{children}</code>
@@ -100,6 +72,12 @@ export function MessageBubble({ message }: { message: Message }) {
               {message.content}
             </ReactMarkdown>
           )}
+          {message.patches?.map(({ name, patch }) => (
+            <figure key={name} className="my-2">
+              <figcaption className="text-xs text-muted-foreground mb-1">{name}</figcaption>
+              <PdPatchViewer patch={patch} />
+            </figure>
+          ))}
         </div>
 
         {message.sources && message.sources.length > 0 && (

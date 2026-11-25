@@ -6,11 +6,18 @@ export interface Source {
   object_name: string | null
 }
 
+/** A patch the agent wrote, drawn under its answer. */
+export interface PatchArtifact {
+  name: string
+  patch: PdPatch
+}
+
 export interface Message {
   role: 'user' | 'assistant'
   content: string
   sources?: Source[]
   messageId?: string
+  patches?: PatchArtifact[]
 }
 
 export interface HistoryItem {

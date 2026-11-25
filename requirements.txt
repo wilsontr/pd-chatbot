@@ -7,6 +7,7 @@ openai
 google-genai
 rank-bm25
 cachetools
+numpy
 slowapi
 python-dotenv
 beautifulsoup4
@@ -17,3 +18,4 @@ pytest
 sqlalchemy
 psycopg[binary]
 httpx
+modal

@@ -1,14 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import type { Message, HistoryItem } from '../types'
 
-function getDisplayContent(raw: string): string {
-  const lastOpen = raw.lastIndexOf('```pd-patch')
-  if (lastOpen === -1) return raw
-  const after = raw.slice(lastOpen + 11)
-  if (after.includes('```')) return raw
-  return raw.slice(0, lastOpen) + '\n```loading-patch\n```\n'
-}
-
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([])
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([])
@@ -79,16 +71,27 @@ export function useChat() {
             }])
           } else if (event.type === 'chunk') {
             rawContent += event.text
-            const displayContent = getDisplayContent(rawContent)
+            const content = rawContent
             setMessages(prev => {
               const last = prev[prev.length - 1]
-              return [...prev.slice(0, -1), { ...last, content: displayContent }]
+              return [...prev.slice(0, -1), { ...last, content }]
+            })
+          } else if (event.type === 'text_reset') {
+            // The text so far preceded a tool call, so it was not the answer.
+            rawContent = ''
+            setMessages(prev => {
+              const last = prev[prev.length - 1]
+              return [...prev.slice(0, -1), { ...last, content: '' }]
+            })
+          } else if (event.type === 'artifact' && event.kind === 'pd_patch') {
+            setMessages(prev => {
+              const last = prev[prev.length - 1]
+              return [...prev.slice(0, -1), { ...last, patches: [...(last.patches ?? []), event.data] }]
             })
           } else if (event.type === 'done') {
-            // Ensure final content is raw (replaces any leftover placeholder)
             setMessages(prev => {
               const last = prev[prev.length - 1]
-              return [...prev.slice(0, -1), { ...last, content: rawContent, messageId: event.message_id }]
+              return [...prev.slice(0, -1), { ...last, messageId: event.message_id }]
             })
             setChatHistory(event.history)
           }

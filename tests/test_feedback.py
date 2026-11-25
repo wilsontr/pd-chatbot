@@ -99,6 +99,8 @@ def client(tmp_path, monkeypatch):
         yield events.Sources(
             items=({"heading_path": "osc~"},), query_type="object_reference"
         )
+        yield events.TextDelta("Let me check.")
+        yield events.TextReset()
         yield events.TextDelta("A sine ")
         yield events.TextDelta("oscillator.")
         yield events.Artifact(
@@ -181,6 +183,7 @@ class TestAgentEventFrames:
         assert frames[meta_index]["sources"] == [{"heading_path": "osc~"}]
         assert frames[meta_index]["query_type"] == "object_reference"
         assert "artifact" in types
+        assert types.index("chunk") < types.index("text_reset")
         assert types[-1] == "done"
         assert frames[-1]["message_id"]
         assert frames[-1]["turns"] == 2

@@ -8,7 +8,10 @@ The loop owns one invariant that the rest of the system depends on: ``sources``
 is yielded before the first ``text_delta``. Text the model emits before it calls
 a tool is buffered and released right after the citations, so every adapter can
 create the answer — with its sources — and then append text to it. Once the
-citations are out, deltas are yielded as they arrive.
+citations are out, deltas are yielded as they arrive; if that turn then calls a
+tool whose result could change the answer, a ``text_reset`` takes the text back and
+the model is told to write its answer again. Text beside an output-only call
+(``write_patch``) stays.
 
 Bounded by ``max_turns``. If the budget runs out while the model still wants to
 call tools, the loop asks once more with tools disabled and returns that answer
@@ -27,7 +30,7 @@ import newrelic.agent
 from model_config import ANSWER_MODEL
 
 from . import observability
-from .events import AgentEvent, Sources, TextDelta, ToolCall, ToolResult
+from .events import AgentEvent, Sources, TextDelta, TextReset, ToolCall, ToolResult
 from .llm import ModelClient, ModelDelta, ModelRequest, ModelTurn
 from .prompt import AGENT_SYSTEM_PROMPT
 from .retrieval import chunks_to_sources
@@ -40,6 +43,15 @@ TURN_LIMIT_NOTE = (
     "\n\nYou have reached the tool-call limit for this request. Answer now with "
     "the information you already have, and say plainly what you could not verify."
 )
+
+
+#: Sent with the tool results when an answer-length text was discarded.
+DISCARDED_TEXT_NOTE = (
+    "\n\n[The text you wrote before this tool call was not shown to the user. When you are "
+    "done with tools, write the complete answer, including anything you had already written "
+    "that still holds.]"
+)
+_NARRATION_CHARS = 200
 
 
 @dataclass(frozen=True)
@@ -104,6 +116,8 @@ class AgentLoop:
         sources_sent = False
         turn = 0
         forcing_final = False
+        retracted = ""
+        separate = False
 
         while True:
             if turn >= max(1, self.config.max_turns):
@@ -134,6 +148,12 @@ class AgentLoop:
                     if isinstance(piece, ModelDelta):
                         if not piece.text:
                             continue
+                        if separate:
+                            # Keeps this turn's text apart from the kept turn's.
+                            separate = False
+                            (answer_parts if sources_sent else pending).append("\n\n")
+                            if sources_sent:
+                                yield TextDelta("\n\n")
                         if sources_sent:
                             # Citations are out: stream the answer as it arrives.
                             answer_parts.append(piece.text)
@@ -156,14 +176,32 @@ class AgentLoop:
             self.state.turns = turn + 1
             self.state.stop_reason = final.stop_reason
 
+            discarded = ""
             if final.tool_calls:
-                # Text emitted alongside a tool_use block is narration ("let me
-                # look that up"), not answer text. The tool_call/tool_result
-                # events already give an interface its step display, so this is
-                # dropped rather than glued onto the answer.
-                pending.clear()
+                if all(self._output_only(call.name) for call in final.tool_calls):
+                    separate = bool("".join(answer_parts + pending).strip())
+                else:
+                    # Narration ("let me look that up"), or an answer written
+                    # before its evidence. The tool events already give an
+                    # interface its step display.
+                    discarded = "".join(answer_parts + pending).strip()
+                    if answer_parts:
+                        answer_parts.clear()
+                        yield TextReset()
+                    pending.clear()
+                    separate = False
+                    if len(discarded) > _NARRATION_CHARS:
+                        retracted = discarded
 
             if not final.tool_calls:
+                if not "".join(answer_parts + pending).strip() and retracted.strip():
+                    # The model wrote its answer before its last tool call and
+                    # had nothing to add after it. Better that than no answer.
+                    pending[:] = [retracted]
+                    if sources_sent:
+                        answer_parts.append(retracted)
+                        yield TextDelta(retracted)
+                        pending.clear()
                 if not sources_sent:
                     sources_sent = True
                     async for event in self._citations_then_buffered(pending, answer_parts):
@@ -202,6 +240,8 @@ class AgentLoop:
                     "content": outcome.content,
                     **({"is_error": True} if not outcome.ok else {}),
                 })
+            if len(discarded) > _NARRATION_CHARS:
+                result_blocks[-1]["content"] += DISCARDED_TEXT_NOTE
             messages.append({"role": "user", "content": result_blocks})
 
             if not sources_sent and self.state.chunks:
@@ -216,6 +256,10 @@ class AgentLoop:
         if not sources_sent:
             async for event in self._citations_then_buffered(pending, answer_parts):
                 yield event
+
+    def _output_only(self, name: str) -> bool:
+        tool = self.tools.get(name)
+        return tool is not None and tool.spec.output_only
 
     async def _citations_then_buffered(
         self, pending: list[str], answer_parts: list[str] | None = None

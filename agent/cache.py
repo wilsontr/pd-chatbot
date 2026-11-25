@@ -32,6 +32,8 @@ class CachedAnswer:
     chunks: list[Chunk] = field(default_factory=list)
     query_type: str = ""
     extend_history: bool = True
+    patches: tuple[dict, ...] = ()
+    audio: tuple[dict, ...] = ()
 
 
 response_cache: cachetools.TTLCache = cachetools.TTLCache(
@@ -56,6 +58,8 @@ def put(
     chunks: list[Chunk] | None = None,
     query_type: str = "",
     extend_history: bool = True,
+    patches: tuple[dict, ...] = (),
+    audio: tuple[dict, ...] = (),
 ) -> None:
     with _lock:
         response_cache[cache_key(question)] = CachedAnswer(
@@ -64,6 +68,8 @@ def put(
             chunks=list(chunks or []),
             query_type=query_type,
             extend_history=extend_history,
+            patches=patches,
+            audio=audio,
         )
 
 

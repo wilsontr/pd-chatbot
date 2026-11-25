@@ -65,6 +65,12 @@ playable audio clip.
 - a read-only base image
 - limits on output size
 
+*Done in TASK-5.4 as a self-hosted container: see [SANDBOX.md](SANDBOX.md).*
+
+*Done in TASK-5.5: `write_patch`, `run_patch` and `analyze_audio` (see
+`agent/tools/patch.py`); `run_python` was not built. The last two are offered only
+when `PD_SANDBOX_BACKEND` is set. Results are in [PATCH_EVAL.md](PATCH_EVAL.md).*
+
 **Measurable result:** add an eval metric for "patch executes cleanly and
 meets its spec". Compare pipeline vs. agent, and agent with vs. without the
 sandbox.

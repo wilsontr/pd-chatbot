@@ -24,6 +24,9 @@ class ToolSpec:
     name: str
     description: str
     input_schema: dict[str, Any]
+    #: True when the result cannot change the answer (the tool only adds output),
+    #: so text the model wrote alongside the call is still its answer.
+    output_only: bool = False
 
     def to_api(self) -> dict[str, Any]:
         return {

@@ -308,8 +308,15 @@ class TestPromptContract:
         assert "One object's documented behaviour is not another's" not in SYSTEM_PROMPT
         assert "does not make an object-level specific acceptable" not in SYSTEM_PROMPT
 
-    def test_agent_prompt_is_the_shipped_prompt_plus_tool_rules(self):
-        assert AGENT_SYSTEM_PROMPT.startswith(SYSTEM_PROMPT)
+    def test_agent_and_pipeline_prompts_differ_only_in_how_patches_are_written(self):
+        from agent import prompt
+
+        assert AGENT_SYSTEM_PROMPT.startswith(prompt._ANSWER_RULES)
+        assert SYSTEM_PROMPT == (
+            prompt._ANSWER_RULES + prompt._FENCED_PATCH_RULES + prompt._PROSE_CHAIN_RULE
+        )
+        assert "write_patch" not in SYSTEM_PROMPT
+        assert "{\"objects\"" not in AGENT_SYSTEM_PROMPT
 
 
 class TestGate:

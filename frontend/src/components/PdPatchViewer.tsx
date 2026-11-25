@@ -84,40 +84,6 @@ function boxFill(type: PdObject['type']): string {
   return type === 'array' ? '#fff' : '#dfdfdf'
 }
 
-function parsePatch(json: string): { patch: PdPatch } | { error: string } {
-  let p: unknown
-  try {
-    p = JSON.parse(json)
-  } catch {
-    return { error: 'truncated' }
-  }
-  if (!p || typeof p !== 'object') return { error: 'invalid' }
-  const raw = p as Record<string, unknown>
-  if (!Array.isArray(raw.objects) || !Array.isArray(raw.connections)) {
-    return { error: 'invalid' }
-  }
-  const patch = raw as unknown as PdPatch
-
-  // Drop objects that appear in no connections — they are LLM omissions.
-  // Comments and known UI objects are intentionally standalone and are kept regardless.
-  // Objects that are intentionally standalone — either UI widgets with no wires,
-  // or named data stores accessed by name (table, array) rather than by connection.
-  // Matches both the box type and an 'obj' box whose text names the object.
-  const STANDALONE = new Set<string>(['bng', 'tgl', 'hsl', 'vsl', 'hradio', 'vradio', 'vu', 'cnv', 'nbx', 'table', 'array'])
-  const connected = new Set<string>()
-  for (const c of patch.connections) {
-    connected.add(c.srcId)
-    connected.add(c.dstId)
-  }
-  const objects = patch.objects.filter(o => {
-    if (o.type === 'comment' || STANDALONE.has(o.type)) return true
-    if (connected.has(o.id)) return true
-    const objName = o.text?.trim().split(/\s+/)[0]
-    return STANDALONE.has(objName)
-  })
-  return { patch: { ...patch, objects } }
-}
-
 function DownloadButton({ patch }: { patch: PdPatch }) {
   const [state, setState] = useState<'idle' | 'busy' | 'failed'>('idle')
 
@@ -138,27 +104,14 @@ function DownloadButton({ patch }: { patch: PdPatch }) {
   )
 }
 
-export function PdPatchViewer({ json }: { json: string }) {
-  const result = parsePatch(json)
-
-  if ('error' in result) {
-    return (
-      <div className="my-3 px-3 py-2 rounded border border-amber-200/60 bg-amber-50/40 text-xs text-amber-800/80 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-400/80">
-        Patch diagram could not be rendered — the response may have been cut off.
-      </div>
-    )
-  }
-
-  const { patch } = result
-  if (patch.objects.length === 0) return null
-
+export function PdPatchViewer({ patch }: { patch: PdPatch }) {
   const layout = layoutPatch(patch)
   const { w: svgW, h: svgH } = computeViewBox(layout)
   const objMap = new Map(patch.objects.map(o => [o.id, o]))
 
   return (
     <div className="my-3">
-    <div className="overflow-x-auto rounded border border-black/20 inline-block max-w-full" data-patch-json={json}>
+    <div className="overflow-x-auto rounded border border-black/20 inline-block max-w-full">
       <svg
         width={svgW}
         height={svgH}

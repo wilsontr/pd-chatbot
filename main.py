@@ -28,11 +28,13 @@ from typing import List, Literal, Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from agent import artifacts
 from agent.cache import response_cache as _response_cache
 from agent.cache import stats as _cache_stats
 from agent.chat import stream_chat
-from agent.events import Artifact, Done, Sources, TextDelta, ToolCall, ToolResult
+from agent.events import Artifact, Done, Sources, TextDelta, TextReset, ToolCall, ToolResult
 from agent.observability import flush as flush_tracing
+from agent.patches import append_patches
 from feedback_store import FeedbackStore, UnknownMessageError
 from pd_file import to_pd
 from pd_schema import PdPatchDownload
@@ -163,6 +165,9 @@ async def chat_endpoint(request: Request, req: ChatRequest):
             elif isinstance(event, TextDelta):
                 answer_parts.append(event.text)
                 yield _sse({"type": "chunk", "text": event.text})
+            elif isinstance(event, TextReset):
+                answer_parts.clear()
+                yield _sse(event.to_dict())
             elif isinstance(event, ToolCall):
                 yield _sse(event.to_dict())
             elif isinstance(event, ToolResult):
@@ -176,7 +181,9 @@ async def chat_endpoint(request: Request, req: ChatRequest):
                     payload["message_id"] = await asyncio.to_thread(
                         feedback_store.save_response,
                         req.message,
-                        final_answer or "".join(answer_parts),
+                        append_patches(
+                            final_answer or "".join(answer_parts), event.patches
+                        ),
                         sources,
                         query_type,
                     )
@@ -222,6 +229,18 @@ async def patch_file_endpoint(request: Request, patch: PdPatchDownload):
         to_pd(patch),
         media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="patch.pd"'},
+    )
+
+
+@app.get("/artifacts/{artifact_id}", dependencies=[Depends(require_api_key)])
+@limiter.limit("60/minute")
+async def artifact_endpoint(request: Request, artifact_id: str):
+    """The bytes of an ``audio`` artifact; gone after an hour or a restart."""
+    stored = artifacts.get(artifact_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired artifact")
+    return Response(
+        stored.data, media_type=stored.mime, headers={"Cache-Control": "private, max-age=3600"}
     )
 
 
