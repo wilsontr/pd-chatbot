@@ -431,7 +431,7 @@ The application is deployed as two separate services:
 
 | Layer | Platform | Config |
 |---|---|---|
-| Backend (FastAPI) | [Railway](https://railway.app) | `railway.json` |
+| Backend (FastAPI) | [Railway](https://railway.app) | `.railway/railway.ts` |
 | Frontend (React/Vite static build) | [Vercel](https://vercel.com) | `frontend/vercel.json` |
 
 The Vercel deployment rewrites `/api/*` to the Railway backend URL server-side, so the browser never makes cross-origin requests and CORS is not required for production.
@@ -548,7 +548,7 @@ VITE_NR_APP_ID=...
 VITE_NR_ACCOUNT_ID=...
 ```
 
-The Railway start command (`railway.json`) uses `newrelic-admin run-program` to bootstrap the Python APM agent. The frontend initialises `BrowserAgent` in `src/main.jsx`, guarded by `VITE_NR_LICENSE_KEY` so local dev without credentials is unaffected.
+The Railway start command (`.railway/railway.ts`) uses `newrelic-admin run-program` to bootstrap the Python APM agent. The frontend initialises `BrowserAgent` in `src/main.jsx`, guarded by `VITE_NR_LICENSE_KEY` so local dev without credentials is unaffected.
 
 **Langfuse** (LLM-native tracing) — token counts, trace trees, cost attribution.
 Self-hosted on Railway via the [Langfuse v3 template](https://langfuse.com/self-hosting/deployment/railway).
