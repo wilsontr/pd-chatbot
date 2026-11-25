@@ -18,6 +18,9 @@ feedback.db-shm
 runs.db
 runs.db-wal
 runs.db-shm
+dbos_system.db
+dbos_system.db-wal
+dbos_system.db-shm
 
 # Exported golden-dataset candidates — user questions, review locally only
 evaluation/feedback_candidates*.json

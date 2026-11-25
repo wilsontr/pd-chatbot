@@ -39,9 +39,12 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from .events import (
     AgentEvent,
+    ApprovalRequested,
+    ApprovalResolved,
     Artifact,
     Done,
     ModelTurnEvent,
@@ -179,6 +182,22 @@ def event_from_record(event_type: str, payload: dict[str, Any]) -> AgentEvent:
             kind=str(payload.get("kind", "")),
             data=dict(payload.get("data") or {}),
         )
+    if event_type == ApprovalRequested.type:
+        return ApprovalRequested(
+            call_id=str(payload.get("call_id", "")),
+            tool_name=str(payload.get("tool_name", "")),
+            arguments=dict(payload.get("arguments") or {}),
+            reason=str(payload.get("reason", "")),
+            interface=str(payload.get("interface", "")),
+        )
+    if event_type == ApprovalResolved.type:
+        return ApprovalResolved(
+            call_id=str(payload.get("call_id", "")),
+            tool_name=str(payload.get("tool_name", "")),
+            approved=bool(payload.get("approved", False)),
+            comment=str(payload.get("comment", "")),
+            timed_out=bool(payload.get("timed_out", False)),
+        )
     if event_type == Done.type:
         return Done(
             answer=str(payload.get("answer", "")),
@@ -233,25 +252,37 @@ class RunStore:
         langfuse_trace_id: str | None = None,
         langfuse_trace_url: str | None = None,
         created_at: datetime | None = None,
+        ignore_existing: bool = False,
     ) -> str:
         """Create a new run header row and return its ``run_id``."""
         run_id = run_id or uuid.uuid4().hex
         session_id = session_id or uuid.uuid4().hex
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(
+                    insert(runs).values(
+                        run_id=run_id,
+                        session_id=session_id,
+                        question=question,
+                        interface=interface,
+                        status="running",
+                        model=model or "",
+                        langfuse_trace_id=langfuse_trace_id,
+                        langfuse_trace_url=langfuse_trace_url,
+                        created_at=created_at or _utcnow(),
+                    )
+                )
+        except IntegrityError:
+            if not ignore_existing:
+                raise
+        return run_id
+
+    def update_run_status(self, run_id: str, status: str) -> None:
+        """Update a run's live status (e.g. ``waiting_approval`` -> ``running``)."""
         with self.engine.begin() as conn:
             conn.execute(
-                insert(runs).values(
-                    run_id=run_id,
-                    session_id=session_id,
-                    question=question,
-                    interface=interface,
-                    status="running",
-                    model=model or "",
-                    langfuse_trace_id=langfuse_trace_id,
-                    langfuse_trace_url=langfuse_trace_url,
-                    created_at=created_at or _utcnow(),
-                )
+                update(runs).where(runs.c.run_id == run_id).values(status=status)
             )
-        return run_id
 
     def append_event(
         self,
@@ -262,18 +293,27 @@ class RunStore:
         payload: dict[str, Any],
         *,
         created_at: datetime | None = None,
+        ignore_existing: bool = False,
     ) -> None:
         """Append a single ordered event to a run."""
-        self.append_events([{
-            "run_id": run_id,
-            "session_id": session_id,
-            "seq": seq,
-            "event_type": event_type,
-            "payload": payload,
-            "created_at": created_at or _utcnow(),
-        }])
+        self.append_events(
+            [{
+                "run_id": run_id,
+                "session_id": session_id,
+                "seq": seq,
+                "event_type": event_type,
+                "payload": payload,
+                "created_at": created_at or _utcnow(),
+            }],
+            ignore_existing=ignore_existing,
+        )
 
-    def append_events(self, rows: Sequence[dict[str, Any]]) -> None:
+    def append_events(
+        self,
+        rows: Sequence[dict[str, Any]],
+        *,
+        ignore_existing: bool = False,
+    ) -> None:
         """Atomically append one or more ordered event rows."""
         if not rows:
             return
@@ -292,8 +332,20 @@ class RunStore:
             }
             for row in rows
         ]
-        with self.engine.begin() as conn:
-            conn.execute(insert(run_events), values)
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(insert(run_events), values)
+        except IntegrityError:
+            if not ignore_existing:
+                raise
+            # Insert row-by-row ignoring already-persisted (run_id, seq) entries
+            # when a durable step is retried after a crash right before commit.
+            for item in values:
+                try:
+                    with self.engine.begin() as conn:
+                        conn.execute(insert(run_events).values(**item))
+                except IntegrityError:
+                    pass
 
     def finish_run(
         self,

@@ -32,6 +32,16 @@ from agent import artifacts
 from agent.cache import response_cache as _response_cache
 from agent.cache import stats as _cache_stats
 from agent.chat import stream_chat
+from agent.durable import (
+    approve_run,
+    default_runtime,
+    destroy_dbos,
+    get_pending_approval,
+    is_dbos_launched,
+    launch_dbos,
+    set_runtime,
+    start_durable_run,
+)
 from agent.events import Artifact, Done, Sources, TextDelta, TextReset, ToolCall, ToolResult
 from agent.observability import flush as flush_tracing
 from agent.patches import append_patches
@@ -59,8 +69,20 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+def _ensure_dbos() -> None:
+    if not is_dbos_launched():
+        set_runtime(default_runtime(run_store=run_store))
+        launch_dbos()
+
+
+@app.on_event("startup")
+async def startup():
+    _ensure_dbos()
+
+
 @app.on_event("shutdown")
 async def shutdown():
+    destroy_dbos()
     flush_tracing()
 
 # --- CORS ---
@@ -138,6 +160,20 @@ class FeedbackRequest(BaseModel):
     timestamp: str       # unix seconds, for replay protection
     signature: str       # HMAC-SHA256(message_id|rating|timestamp, api_key)
     comment: str = ""
+
+
+class DurableRunRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    history: List[HistoryItem] = Field(default=[], max_length=20)
+    session_id: Optional[str] = Field(default=None, max_length=128)
+    interface: Literal["web", "cli", "slack", "mcp", "eval"] = "web"
+    approved_tools: List[str] = Field(default=[])
+    pause_for_approval: bool = True
+
+
+class ApprovalDecisionRequest(BaseModel):
+    approved: bool
+    comment: str = Field(default="", max_length=500)
 
 
 def _sse(event: dict) -> str:
@@ -268,6 +304,37 @@ async def list_runs_endpoint(
     return {"runs": items}
 
 
+@app.post("/runs/durable", status_code=202, dependencies=[Depends(require_api_key)])
+@limiter.limit("10/minute")
+async def start_durable_run_endpoint(request: Request, req: DurableRunRequest):
+    """Start a DBOS-backed durable agent run that survives restarts and supports approval."""
+    _ensure_dbos()
+    history_dicts = [h.model_dump() for h in req.history]
+    run_id, session_id, _handle = await start_durable_run(
+        req.message,
+        history_dicts,
+        session_id=req.session_id,
+        interface=req.interface,
+        approved_tools=req.approved_tools,
+        pause_for_approval=req.pause_for_approval,
+    )
+    return {"run_id": run_id, "session_id": session_id, "status": "running"}
+
+
+@app.post("/runs/{run_id}/approve", dependencies=[Depends(require_api_key)])
+@limiter.limit("30/minute")
+async def approve_run_endpoint(
+    request: Request, run_id: str, req: ApprovalDecisionRequest
+):
+    """Approve or deny a durable run paused on an approval-gated tool call."""
+    _ensure_dbos()
+    run = await asyncio.to_thread(run_store.get_run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Unknown run")
+    await approve_run(run_id, approved=req.approved, comment=req.comment)
+    return {"status": "ok", "run_id": run_id, "approved": req.approved}
+
+
 @app.get("/runs/{run_id}", dependencies=[Depends(require_api_key)])
 @limiter.limit("60/minute")
 async def get_run_endpoint(request: Request, run_id: str):
@@ -275,6 +342,11 @@ async def get_run_endpoint(request: Request, run_id: str):
     run = await asyncio.to_thread(run_store.get_run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Unknown run")
+    if run.get("status") == "waiting_approval" and is_dbos_launched():
+        try:
+            run["pending_approval"] = await get_pending_approval(run_id, timeout_seconds=0.0)
+        except Exception:
+            run["pending_approval"] = None
     return run
 
 

@@ -183,6 +183,56 @@ class Artifact:
 
 
 @dataclass(frozen=True)
+class ApprovalRequested:
+    """A durable run paused waiting for human approval before executing a tool."""
+
+    type: ClassVar[str] = "approval_requested"
+    call_id: str
+    tool_name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    reason: str = ""
+    interface: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "call_id": self.call_id,
+            "tool_name": self.tool_name,
+            "arguments": self.arguments,
+            "reason": self.reason,
+            "interface": self.interface,
+        }
+
+    def to_log_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
+class ApprovalResolved:
+    """Human approval decision received (or timed out) for a paused tool call."""
+
+    type: ClassVar[str] = "approval_resolved"
+    call_id: str
+    tool_name: str
+    approved: bool
+    comment: str = ""
+    timed_out: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "call_id": self.call_id,
+            "tool_name": self.tool_name,
+            "approved": self.approved,
+            "comment": self.comment,
+            "timed_out": self.timed_out,
+        }
+
+    def to_log_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class Done:
     """Terminal event: the finished answer and the history to send next turn."""
 
@@ -232,5 +282,14 @@ class Done:
 
 
 AgentEvent = (
-    ModelTurnEvent | TextDelta | TextReset | ToolCall | ToolResult | Sources | Artifact | Done
+    ModelTurnEvent
+    | TextDelta
+    | TextReset
+    | ToolCall
+    | ToolResult
+    | Sources
+    | Artifact
+    | ApprovalRequested
+    | ApprovalResolved
+    | Done
 )

@@ -19,3 +19,4 @@ sqlalchemy
 psycopg[binary]
 httpx
 modal
+dbos
