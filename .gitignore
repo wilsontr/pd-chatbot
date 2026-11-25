@@ -11,10 +11,13 @@ parsed_book.json
 # ChromaDB vector index — build locally with embed_and_index.py
 chroma_db/
 
-# Feedback database — runtime artifact
+# Feedback & run-log databases — runtime artifacts
 feedback.db
 feedback.db-wal
 feedback.db-shm
+runs.db
+runs.db-wal
+runs.db-shm
 
 # Exported golden-dataset candidates — user questions, review locally only
 evaluation/feedback_candidates*.json

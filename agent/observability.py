@@ -50,6 +50,9 @@ def flush() -> None:
 class _NoopObs:
     """Stand-in when Langfuse is unavailable. Supports update/end/__enter__/__exit__."""
 
+    trace_id: str | None = None
+    id: str | None = None
+
     def update(self, **kwargs: Any) -> None: pass
     def end(self) -> None: pass
     def __enter__(self) -> "_NoopObs": return self
@@ -59,6 +62,8 @@ class _NoopObs:
 def start_obs(name: str, as_type: str = "span", **kwargs: Any) -> Any:
     if _langfuse is None:
         return _NoopObs()
+    if kwargs.get("trace_context") is None:
+        kwargs.pop("trace_context", None)
     return _langfuse.start_observation(as_type=as_type, name=name, **kwargs)
 
 
@@ -66,7 +71,43 @@ def start_obs_ctx(name: str, as_type: str = "span", **kwargs: Any) -> Any:
     """Context-manager observation; sets as current for nested-child propagation."""
     if _langfuse is None:
         return _NoopObs()
+    if kwargs.get("trace_context") is None:
+        kwargs.pop("trace_context", None)
     return _langfuse.start_as_current_observation(as_type=as_type, name=name, **kwargs)
+
+
+def trace_id(obs: Any) -> str | None:
+    """Return the Langfuse trace id for an observation, or None when tracing is off."""
+    tid = getattr(obs, "trace_id", None)
+    return str(tid) if tid else None
+
+
+def trace_url(obs_or_trace_id: Any) -> str | None:
+    """Return the Langfuse UI URL for an observation or trace id, or None."""
+    tid = (
+        obs_or_trace_id
+        if isinstance(obs_or_trace_id, str)
+        else trace_id(obs_or_trace_id)
+    )
+    if not tid or _langfuse is None:
+        return None
+    try:
+        return _langfuse.get_trace_url(trace_id=tid)
+    except Exception:
+        logger.debug("failed to build langfuse trace url", exc_info=True)
+        return None
+
+
+def trace_context(obs: Any) -> dict[str, str] | None:
+    """Build a Langfuse TraceContext dict to nest child observations under ``obs``."""
+    tid = trace_id(obs)
+    if not tid:
+        return None
+    ctx: dict[str, str] = {"trace_id": tid}
+    span_id = getattr(obs, "id", None)
+    if span_id:
+        ctx["parent_span_id"] = str(span_id)
+    return ctx
 
 
 class SimpleUsage:

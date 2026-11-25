@@ -218,7 +218,9 @@ class TestEventStream:
             events = drain("What are the inlets of [osc~]?", client=client)
 
         kinds = [type(e).__name__ for e in events]
-        assert kinds == ["ToolCall", "ToolResult", "Sources", "TextDelta", "Done"]
+        assert kinds == [
+            "ModelTurnEvent", "ToolCall", "ToolResult", "Sources", "TextDelta", "ModelTurnEvent", "Done"
+        ]
         done = events[-1]
         assert done.answer == "It has two inlets."
         assert done.query_type == "object_reference"

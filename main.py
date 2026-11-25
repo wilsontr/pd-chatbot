@@ -19,7 +19,7 @@ import time
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, Request, Depends, HTTPException, Security
+from fastapi import FastAPI, Request, Depends, HTTPException, Query, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.security import APIKeyHeader
@@ -35,6 +35,7 @@ from agent.chat import stream_chat
 from agent.events import Artifact, Done, Sources, TextDelta, TextReset, ToolCall, ToolResult
 from agent.observability import flush as flush_tracing
 from agent.patches import append_patches
+from agent.store import RunStore
 from feedback_store import FeedbackStore, UnknownMessageError
 from pd_file import to_pd
 from pd_schema import PdPatchDownload
@@ -103,8 +104,9 @@ def _verify_hmac(payload_signature: str, key: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-# --- Feedback store (Postgres via DATABASE_URL, SQLite locally) ---
+# --- Persistent stores (Postgres via DATABASE_URL, SQLite locally) ---
 feedback_store = FeedbackStore()
+run_store = RunStore()
 
 # --- Request / response models ---
 class HistoryItem(BaseModel):
@@ -114,6 +116,7 @@ class HistoryItem(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     history: List[HistoryItem] = Field(default=[], max_length=20)
+    session_id: Optional[str] = Field(default=None, max_length=128)
 
 class Source(BaseModel):
     heading_path: str
@@ -155,7 +158,13 @@ async def chat_endpoint(request: Request, req: ChatRequest):
         final_answer = ""
         sources: list[dict] = []
         query_type = ""
-        async for event in stream_chat(req.message, history_dicts, interface="web"):
+        async for event in stream_chat(
+            req.message,
+            history_dicts,
+            interface="web",
+            session_id=req.session_id,
+            run_store=run_store,
+        ):
             if isinstance(event, Sources):
                 # The browser creates the assistant message on `meta`, so this
                 # frame must come before the first `chunk` (the core guarantees it).
@@ -242,6 +251,31 @@ async def artifact_endpoint(request: Request, artifact_id: str):
     return Response(
         stored.data, media_type=stored.mime, headers={"Cache-Control": "private, max-age=3600"}
     )
+
+
+@app.get("/runs", dependencies=[Depends(require_api_key)])
+@limiter.limit("60/minute")
+async def list_runs_endpoint(
+    request: Request,
+    session_id: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """List recent agent runs, optionally filtered by session id."""
+    items = await asyncio.to_thread(
+        run_store.list_runs, session_id=session_id, limit=limit, offset=offset
+    )
+    return {"runs": items}
+
+
+@app.get("/runs/{run_id}", dependencies=[Depends(require_api_key)])
+@limiter.limit("60/minute")
+async def get_run_endpoint(request: Request, run_id: str):
+    """Return a stored agent run's metadata, Langfuse trace link and full event history."""
+    run = await asyncio.to_thread(run_store.get_run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Unknown run")
+    return run
 
 
 @app.get("/health")

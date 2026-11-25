@@ -138,9 +138,10 @@ class TestSingleTurn:
 
         events = run(loop)
 
-        assert kinds(events) == ["Sources", "TextDelta"]
+        assert kinds(events) == ["Sources", "TextDelta", "ModelTurnEvent"]
         assert events[0].items == ()
         assert events[1].text == "Pure Data is a visual language."
+        assert events[2].turn == 1
         assert loop.state.answer == "Pure Data is a visual language."
         assert loop.state.turns == 1
         assert loop.state.tool_calls == 0
@@ -180,15 +181,18 @@ class TestToolUse:
 
         events = run(loop)
 
-        assert kinds(events) == ["ToolCall", "ToolResult", "Sources", "TextDelta"]
-        call = events[0]
+        assert kinds(events) == [
+            "ModelTurnEvent", "ToolCall", "ToolResult", "Sources", "TextDelta", "ModelTurnEvent"
+        ]
+        call = events[1]
         assert isinstance(call, ToolCall)
         assert call.name == "search_docs"
         assert call.arguments == {"query": "osc~ inlets", "object_names": ["osc~"]}
-        result = events[1]
+        result = events[2]
         assert isinstance(result, ToolResult)
         assert result.ok and result.chunks == (CHUNK,)
-        assert events[2].items[0]["heading_path"] == "osc~"
+        assert result.latency_ms is not None and result.latency_ms >= 0
+        assert events[3].items[0]["heading_path"] == "osc~"
         assert loop.state.retrieval_calls == 1
         assert loop.state.tool_calls == 1
         assert loop.state.chunks == [CHUNK]
@@ -245,8 +249,10 @@ class TestToolUse:
 
         events = run(loop)
 
-        assert kinds(events) == ["ToolCall", "ToolResult", "Sources", "TextDelta"]
-        assert events[2].items == ()
+        assert kinds(events) == [
+            "ModelTurnEvent", "ToolCall", "ToolResult", "Sources", "TextDelta", "ModelTurnEvent"
+        ]
+        assert events[3].items == ()
         assert loop.state.retrieval_calls == 0
 
     def test_unknown_tool_is_reported_to_the_model(self):

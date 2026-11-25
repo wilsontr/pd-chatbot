@@ -355,7 +355,8 @@ class TestLoop:
         events, state = stream(
             ("", [("search_docs", {})]), (LONG, [("search_docs", {})]), ("", []))
         assert state.answer == LONG.strip()
-        assert isinstance(events[-1], TextDelta) and events[-1].text == LONG.strip()
+        deltas = [e for e in events if isinstance(e, TextDelta)]
+        assert deltas and deltas[-1].text == LONG.strip()
 
     def test_the_model_is_told_when_an_answer_was_discarded(self):
         _, state = stream(

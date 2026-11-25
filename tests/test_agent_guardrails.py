@@ -124,7 +124,9 @@ class TestRunBudgets:
         assert loop.state.stop_reason == "budget_tokens"
         assert loop.state.total_tokens == 1100
         assert BUDGET_MESSAGES["tokens"] in loop.state.answer
-        assert isinstance(events[0], Sources)
+        sources_idx = next(i for i, e in enumerate(events) if isinstance(e, Sources))
+        text_idx = next(i for i, e in enumerate(events) if isinstance(e, TextDelta))
+        assert sources_idx < text_idx
         assert any(isinstance(e, TextDelta) and "token budget" in e.text for e in events)
 
     def test_cost_budget_exhaustion_stops_run_with_clear_message(self):

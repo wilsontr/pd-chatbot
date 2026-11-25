@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+import uuid
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Collection
 
@@ -37,6 +39,7 @@ from .patch_counts import repair_patch
 from .patches import append_patches, strip_patch_blocks
 from .prompt import agent_system_prompt
 from .retrieval import chunks_to_sources
+from .store import RunRecorder, RunStore
 from .tools import ToolRegistry
 from .tools.docs import default_tools
 from .tools.patch import execution_enabled, patch_tools
@@ -205,26 +208,76 @@ async def stream_chat(
     interface: str = "web",
     policy: ToolPolicy | None = None,
     approved_tools: Collection[str] = (),
+    run_id: str | None = None,
+    session_id: str | None = None,
+    run_store: RunStore | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Answer one question, yielding the typed event stream ending in ``done``."""
     history = list(history or [])
+    run_id = run_id or uuid.uuid4().hex
+    session_id = session_id or uuid.uuid4().hex
+    recorder = RunRecorder(run_store, run_id=run_id, session_id=session_id)
+    run_t0 = time.perf_counter()
+
+    def _elapsed_ms() -> float:
+        return round((time.perf_counter() - run_t0) * 1000, 2)
+
+    def _current_cost_usd(fallback: float | None = None) -> float | None:
+        tracker = cost_tracker.current()
+        if tracker is not None and tracker.calls:
+            return round(tracker.total_usd, 8)
+        return fallback
 
     if check_prompt_injection(question):
         newrelic.agent.record_custom_metric("Custom/Guard/InjectionBlocked", 1)
         logger.warning("prompt injection blocked: %r", question[:120])
-        yield Sources(items=(), query_type="conceptual")
-        yield TextDelta(INJECTION_RESPONSE)
-        yield Done(
+        await recorder.start(question, interface=interface)
+        ev_sources = Sources(items=(), query_type="conceptual")
+        await recorder.record(ev_sources)
+        yield ev_sources
+        ev_text = TextDelta(INJECTION_RESPONSE)
+        await recorder.record(ev_text)
+        yield ev_text
+        ev_done = Done(
             answer=INJECTION_RESPONSE,
             new_history=history,
             query_type="conceptual",
             refused=True,
+            run_id=run_id,
+            session_id=session_id,
         )
+        await recorder.record(ev_done)
+        await recorder.finish(
+            status="refused",
+            query_type="conceptual",
+            answer=INJECTION_RESPONSE,
+            refused=True,
+            latency_ms=_elapsed_ms(),
+        )
+        yield ev_done
         return
 
-    root_meta: dict = {"history_turns": len(history) // 2, "engine": "agent"}
+    root_meta: dict = {
+        "history_turns": len(history) // 2,
+        "engine": "agent",
+        "interface": interface,
+        "run_id": run_id,
+        "session_id": session_id,
+    }
     root = observability.start_obs("chat", as_type="span", input=question, metadata=root_meta)
+    lf_trace_id = observability.trace_id(root)
+    lf_trace_url = observability.trace_url(root)
+    lf_trace_ctx = observability.trace_context(root)
     cost_token = cost_tracker.start()
+    finished_log = False
+
+    await recorder.start(
+        question,
+        interface=interface,
+        model=config.model if config is not None else "",
+        langfuse_trace_id=lf_trace_id,
+        langfuse_trace_url=lf_trace_url,
+    )
 
     try:
         history = await compress_history_async(history)
@@ -242,24 +295,47 @@ async def stream_chat(
             )
             root_meta["cache"] = "hit"
             root.update(output=hit.answer[:500], metadata=root_meta)
-            yield Sources(
+            ev_sources = Sources(
                 items=tuple(chunks_to_sources(hit.chunks)),
                 query_type=hit.query_type,
             )
-            yield TextDelta(hit.answer)
+            await recorder.record(ev_sources)
+            yield ev_sources
+            ev_text = TextDelta(hit.answer)
+            await recorder.record(ev_text)
+            yield ev_text
             for item in hit.patches:
-                yield Artifact(kind="pd_patch", data=item)
+                ev_art = Artifact(kind="pd_patch", data=item)
+                await recorder.record(ev_art)
+                yield ev_art
             for item in hit.audio:
                 if artifacts.get(item["id"]) is not None:
-                    yield Artifact(kind="audio", data=item)
-            yield Done(
+                    ev_art = Artifact(kind="audio", data=item)
+                    await recorder.record(ev_art)
+                    yield ev_art
+            ev_done = Done(
                 answer=hit.answer,
                 patches=hit.patches,
                 new_history=new_history[-HISTORY_MAX_OUTGOING:],
                 chunks=tuple(hit.chunks),
                 query_type=hit.query_type,
                 cached=True,
+                run_id=run_id,
+                session_id=session_id,
+                langfuse_trace_id=lf_trace_id,
+                langfuse_trace_url=lf_trace_url,
             )
+            await recorder.record(ev_done)
+            await recorder.finish(
+                status="completed",
+                query_type=hit.query_type,
+                answer=hit.answer,
+                cached=True,
+                cost_usd=_current_cost_usd(),
+                latency_ms=_elapsed_ms(),
+            )
+            finished_log = True
+            yield ev_done
             return
 
         newrelic.agent.record_custom_metric("Custom/Cache/Miss", 1)
@@ -280,14 +356,33 @@ async def stream_chat(
                 "refused": True,
             })
             root.update(output=answer, metadata=root_meta)
-            yield Sources(items=(), query_type=query_type)
-            yield TextDelta(answer)
-            yield Done(
+            ev_sources = Sources(items=(), query_type=query_type)
+            await recorder.record(ev_sources)
+            yield ev_sources
+            ev_text = TextDelta(answer)
+            await recorder.record(ev_text)
+            yield ev_text
+            ev_done = Done(
                 answer=answer,
                 new_history=history,
                 query_type=query_type,
                 refused=True,
+                run_id=run_id,
+                session_id=session_id,
+                langfuse_trace_id=lf_trace_id,
+                langfuse_trace_url=lf_trace_url,
             )
+            await recorder.record(ev_done)
+            await recorder.finish(
+                status="refused",
+                query_type=query_type,
+                answer=answer,
+                refused=True,
+                cost_usd=_current_cost_usd(),
+                latency_ms=_elapsed_ms(),
+            )
+            finished_log = True
+            yield ev_done
             return
 
         observability.record_scope_decision(classification.get("scope"), refused=False)
@@ -299,29 +394,30 @@ async def stream_chat(
         )
 
         workspace = workspace or PatchWorkspace()
+        effective_config = config or default_config(
+            interface=interface, policy=policy, approved_tools=approved_tools,
+        )
         loop = AgentLoop(
             client or AnthropicModelClient(),
             tools or default_registry(
                 workspace, interface=interface, policy=policy,
                 approved_tools=approved_tools,
             ),
-            config or default_config(
-                interface=interface, policy=policy, approved_tools=approved_tools,
-            ),
+            effective_config,
         )
         streamed: list[str] = []
         rejected_patch = False
         sources_seen = False
         try:
             async for event in loop.stream(
-                question, history=history, scope_note=scope_note
+                question, history=history, scope_note=scope_note, trace_context=lf_trace_ctx
             ):
                 # The loop answers "what did we find"; the request layer knows
                 # "how was this question routed". Attach the routing label to the
                 # citations so adapters can emit their meta frame before text.
                 if isinstance(event, Sources):
                     sources_seen = True
-                    yield Sources(items=event.items, query_type=query_type)
+                    emitted: AgentEvent = Sources(items=event.items, query_type=query_type)
                 else:
                     if isinstance(event, TextDelta):
                         streamed.append(event.text)
@@ -329,23 +425,48 @@ async def stream_chat(
                         streamed.clear()
                     elif isinstance(event, ToolResult) and event.data.get("invalid_patch"):
                         rejected_patch = True
-                    yield event
+                    emitted = event
+                await recorder.record(emitted)
+                yield emitted
         except Exception:
             # A failed run must still terminate the stream with a usable event;
             # the loop can fail on a provider error mid-answer.
             logger.exception("agent run failed")
             newrelic.agent.record_custom_metric("Custom/Agent/RunError", 1)
             if not sources_seen:
-                yield Sources(items=(), query_type=query_type)
-            yield TextDelta(APOLOGY)
+                ev_sources = Sources(items=(), query_type=query_type)
+                await recorder.record(ev_sources)
+                yield ev_sources
+            ev_apology = TextDelta(APOLOGY)
+            await recorder.record(ev_apology)
+            yield ev_apology
             answer = "".join(streamed) + APOLOGY
-            yield Done(
+            ev_done = Done(
                 answer=answer,
                 new_history=history,
                 query_type=query_type,
                 turns=loop.state.turns,
                 tool_calls=loop.state.tool_calls,
+                run_id=run_id,
+                session_id=session_id,
+                langfuse_trace_id=lf_trace_id,
+                langfuse_trace_url=lf_trace_url,
             )
+            await recorder.record(ev_done)
+            await recorder.finish(
+                status="failed",
+                query_type=query_type,
+                answer=answer,
+                model=effective_config.model,
+                turns=loop.state.turns,
+                tool_calls=loop.state.tool_calls,
+                total_tokens=loop.state.total_tokens,
+                cost_usd=_current_cost_usd(loop.state.cost_usd or None),
+                latency_ms=_elapsed_ms(),
+                stop_reason="error",
+            )
+            finished_log = True
+            yield ev_done
             return
 
         state = loop.state
@@ -364,9 +485,13 @@ async def stream_chat(
                     pass
 
         for item in patches:
-            yield Artifact(kind="pd_patch", data=item)
+            ev_art = Artifact(kind="pd_patch", data=item)
+            await recorder.record(ev_art)
+            yield ev_art
         for item in audio:
-            yield Artifact(kind="audio", data=item)
+            ev_art = Artifact(kind="audio", data=item)
+            await recorder.record(ev_art)
+            yield ev_art
 
         # Faithfulness cannot gate a retry on the streaming path — the answer is
         # already on the wire — so a low score appends a visible disclaimer.
@@ -390,7 +515,9 @@ async def stream_chat(
                 except Exception:
                     pass
             answer += LOW_FAITHFULNESS_DISCLAIMER
-            yield TextDelta(LOW_FAITHFULNESS_DISCLAIMER)
+            ev_disc = TextDelta(LOW_FAITHFULNESS_DISCLAIMER)
+            await recorder.record(ev_disc)
+            yield ev_disc
 
         extend_history = bool(state.chunks) and not state.budget_exceeded
         new_history = (
@@ -424,7 +551,7 @@ async def stream_chat(
             "patch_runs": workspace.runs,
         })
         root.update(output=answer[:500], metadata=root_meta)
-        yield Done(
+        ev_done = Done(
             answer=answer,
             new_history=new_history[-HISTORY_MAX_OUTGOING:],
             chunks=tuple(state.chunks),
@@ -434,8 +561,30 @@ async def stream_chat(
             patch_failed=patch_failed,
             budget_exceeded=state.budget_exceeded,
             patches=patches,
+            run_id=run_id,
+            session_id=session_id,
+            langfuse_trace_id=lf_trace_id,
+            langfuse_trace_url=lf_trace_url,
         )
+        await recorder.record(ev_done)
+        await recorder.finish(
+            status="completed",
+            query_type=query_type,
+            answer=answer,
+            model=effective_config.model,
+            turns=state.turns,
+            tool_calls=state.tool_calls,
+            total_tokens=state.total_tokens,
+            cost_usd=_current_cost_usd(state.cost_usd or None),
+            latency_ms=_elapsed_ms(),
+            stop_reason=state.stop_reason,
+            budget_exceeded=state.budget_exceeded,
+        )
+        finished_log = True
+        yield ev_done
     finally:
+        if not finished_log:
+            await recorder.flush()
         cost_summary = cost_tracker.finish(cost_token)
         if cost_summary is not None:
             observability.record_request_cost(root, root_meta, cost_summary)

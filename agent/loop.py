@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping
 
@@ -31,7 +32,15 @@ from model_config import ANSWER_MODEL
 import pricing
 
 from . import observability
-from .events import AgentEvent, Sources, TextDelta, TextReset, ToolCall, ToolResult
+from .events import (
+    AgentEvent,
+    ModelTurnEvent,
+    Sources,
+    TextDelta,
+    TextReset,
+    ToolCall,
+    ToolResult,
+)
 from .guardrails import ToolPolicy, check_tool_output_injection
 from .llm import ModelClient, ModelDelta, ModelRequest, ModelTurn
 from .prompt import AGENT_SYSTEM_PROMPT
@@ -160,6 +169,7 @@ class AgentLoop:
         *,
         history: list[HistoryItem] | None = None,
         scope_note: str | None = None,
+        trace_context: dict[str, str] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Yield the run's events; ``self.state`` holds the result afterwards."""
         self.state = LoopState()
@@ -208,9 +218,11 @@ class AgentLoop:
             # Stream this turn inline: deltas must reach the client as they
             # arrive, and only a generator body can yield them.
             final: ModelTurn | None = None
+            turn_t0 = time.perf_counter()
             obs = observability.start_obs(
                 "agent_turn", as_type="generation",
                 model=self.config.model, metadata={"turn": turn + 1},
+                trace_context=trace_context,
             )
             try:
                 async for piece in self.client.stream_turn(request):
@@ -234,6 +246,7 @@ class AgentLoop:
                     else:
                         final = piece
             finally:
+                turn_latency_ms = round((time.perf_counter() - turn_t0) * 1000, 2)
                 self._record_turn(obs, final)
 
             if final is None:
@@ -244,6 +257,18 @@ class AgentLoop:
             messages.append({"role": "assistant", "content": final.content})
             self.state.turns = turn + 1
             self.state.stop_reason = final.stop_reason
+
+            turn_cost = pricing.cost_usd(self.config.model, final.usage) if final.usage else None
+            turn_event = ModelTurnEvent(
+                turn=turn + 1,
+                model=self.config.model,
+                content=tuple(final.content),
+                text=final.text,
+                stop_reason=final.stop_reason,
+                usage=dict(final.usage or {}),
+                cost_usd=round(turn_cost, 8) if turn_cost is not None else None,
+                latency_ms=turn_latency_ms,
+            )
 
             discarded = ""
             if final.tool_calls:
@@ -261,6 +286,7 @@ class AgentLoop:
                     separate = False
                     if len(discarded) > _NARRATION_CHARS:
                         retracted = discarded
+                yield turn_event
 
             budget_reason = self._budget_exceeded_reason()
             if budget_reason is not None:
@@ -306,6 +332,7 @@ class AgentLoop:
                     sources_sent = True
                     async for event in self._citations_then_buffered(pending, answer_parts):
                         yield event
+                yield turn_event
                 self.state.answer = "".join(answer_parts)
                 return
 
@@ -330,7 +357,9 @@ class AgentLoop:
             result_blocks = []
             for call in final.tool_calls:
                 yield ToolCall(id=call.id, name=call.name, arguments=dict(call.input))
+                tool_t0 = time.perf_counter()
                 outcome = await self._run_tool(call.name, call.input)
+                tool_latency_ms = round((time.perf_counter() - tool_t0) * 1000, 2)
                 error_key = _tool_error_key(call.name, call.input)
                 if _is_tool_error(call.name, outcome):
                     self.state.tool_errors += 1
@@ -351,6 +380,7 @@ class AgentLoop:
                     content=outcome.content,
                     chunks=outcome.chunks,
                     data=outcome.data,
+                    latency_ms=tool_latency_ms,
                 )
                 result_blocks.append({
                     "type": "tool_result",

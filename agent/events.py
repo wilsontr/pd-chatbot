@@ -8,7 +8,7 @@ is what makes the loop testable without a server.
 
 Event order for a normal request::
 
-    tool_call -> tool_result -> sources -> text_delta* -> artifact* -> done
+    model_turn -> tool_call -> tool_result -> sources -> text_delta* -> model_turn -> artifact* -> done
 
 ``text_reset`` may follow a ``text_delta``: the model wrote text and then called a
 tool, so adapters discard all answer text so far.
@@ -27,6 +27,37 @@ from .types import Chunk, HistoryItem, Source
 
 
 @dataclass(frozen=True)
+class ModelTurnEvent:
+    """One completed model turn, with its raw blocks, token usage, cost and latency."""
+
+    type: ClassVar[str] = "model_turn"
+    turn: int
+    model: str
+    content: tuple[dict[str, Any], ...] = ()
+    text: str = ""
+    stop_reason: str | None = None
+    usage: dict[str, int] = field(default_factory=dict)
+    cost_usd: float | None = None
+    latency_ms: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "turn": self.turn,
+            "model": self.model,
+            "content": list(self.content),
+            "text": self.text,
+            "stop_reason": self.stop_reason,
+            "usage": dict(self.usage),
+            "cost_usd": self.cost_usd,
+            "latency_ms": self.latency_ms,
+        }
+
+    def to_log_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class TextDelta:
     """A piece of the answer as the model produced it."""
 
@@ -35,6 +66,9 @@ class TextDelta:
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": self.type, "text": self.text}
+
+    def to_log_dict(self) -> dict[str, Any]:
+        return self.to_dict()
 
 
 @dataclass(frozen=True)
@@ -45,6 +79,9 @@ class TextReset:
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": self.type}
+
+    def to_log_dict(self) -> dict[str, Any]:
+        return self.to_dict()
 
 
 @dataclass(frozen=True)
@@ -64,6 +101,9 @@ class ToolCall:
             "arguments": self.arguments,
         }
 
+    def to_log_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
 
 @dataclass(frozen=True)
 class ToolResult:
@@ -77,6 +117,7 @@ class ToolResult:
     content: str = ""
     chunks: tuple[Chunk, ...] = ()
     data: dict[str, Any] = field(default_factory=dict)
+    latency_ms: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         # ``content`` is the full text the model reads (potentially thousands of
@@ -89,6 +130,16 @@ class ToolResult:
             "summary": self.summary,
             "chunk_count": len(self.chunks),
             "data": self.data,
+            **({"latency_ms": self.latency_ms} if self.latency_ms is not None else {}),
+        }
+
+    def to_log_dict(self) -> dict[str, Any]:
+        # The run log keeps the full tool output and retrieved chunks so runs
+        # can be replayed, debugged and resumed without repeating tool calls.
+        return {
+            **self.to_dict(),
+            "content": self.content,
+            "chunks": list(self.chunks),
         }
 
 
@@ -107,6 +158,9 @@ class Sources:
             "query_type": self.query_type,
         }
 
+    def to_log_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
 
 @dataclass(frozen=True)
 class Artifact:
@@ -123,6 +177,9 @@ class Artifact:
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": self.type, "kind": self.kind, "data": self.data}
+
+    def to_log_dict(self) -> dict[str, Any]:
+        return self.to_dict()
 
 
 @dataclass(frozen=True)
@@ -141,6 +198,10 @@ class Done:
     patch_failed: bool = False
     budget_exceeded: str | None = None
     patches: tuple[dict[str, Any], ...] = ()
+    run_id: str | None = None
+    session_id: str | None = None
+    langfuse_trace_id: str | None = None
+    langfuse_trace_url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         # The SSE adapter historically sent only {"type", "history"}; keep the
@@ -154,7 +215,22 @@ class Done:
             "cached": self.cached,
             "patch_failed": self.patch_failed,
             **({"budget_exceeded": self.budget_exceeded} if self.budget_exceeded else {}),
+            **({"run_id": self.run_id} if self.run_id else {}),
+            **({"session_id": self.session_id} if self.session_id else {}),
+            **({"langfuse_trace_id": self.langfuse_trace_id} if self.langfuse_trace_id else {}),
+            **({"langfuse_trace_url": self.langfuse_trace_url} if self.langfuse_trace_url else {}),
+        }
+
+    def to_log_dict(self) -> dict[str, Any]:
+        return {
+            **self.to_dict(),
+            "answer": self.answer,
+            "query_type": self.query_type,
+            "patches": list(self.patches),
+            "chunk_count": len(self.chunks),
         }
 
 
-AgentEvent = TextDelta | TextReset | ToolCall | ToolResult | Sources | Artifact | Done
+AgentEvent = (
+    ModelTurnEvent | TextDelta | TextReset | ToolCall | ToolResult | Sources | Artifact | Done
+)
