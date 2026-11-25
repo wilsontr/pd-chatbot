@@ -115,6 +115,33 @@ def _normalize_url(url: str) -> str:
     return url
 
 
+def database_url(url: str | None = None) -> str:
+    """The store's database URL: explicit, then ``DATABASE_URL``, then local SQLite."""
+    return url or os.environ.get("DATABASE_URL") or _DEFAULT_SQLITE_URL
+
+
+def make_engine(url: str | None = None) -> Engine:
+    """Build a SQLAlchemy engine for the app database (Postgres or SQLite)."""
+    url = database_url(url)
+    if url.startswith("sqlite") and os.environ.get("RAILWAY_ENVIRONMENT_NAME"):
+        logger.warning(
+            "DATABASE_URL is not set on Railway; agent state is stored in a local "
+            "SQLite file and will be lost on the next deploy"
+        )
+    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    engine = create_engine(
+        _normalize_url(url), pool_pre_ping=True, connect_args=connect_args
+    )
+    if engine.dialect.name == "sqlite":
+        from sqlalchemy import event
+
+        @event.listens_for(engine, "connect")
+        def _fk_on(dbapi_conn, _record):
+            dbapi_conn.execute("PRAGMA foreign_keys=ON")
+
+    return engine
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -221,24 +248,8 @@ def event_from_record(event_type: str, payload: dict[str, Any]) -> AgentEvent:
 class RunStore:
     """Append-only Postgres/SQLite store for agent runs and their event logs."""
 
-    def __init__(self, url: str | None = None):
-        url = url or os.environ.get("DATABASE_URL") or _DEFAULT_SQLITE_URL
-        if url.startswith("sqlite") and os.environ.get("RAILWAY_ENVIRONMENT_NAME"):
-            logger.warning(
-                "DATABASE_URL is not set on Railway; agent runs are stored in a local "
-                "SQLite file and will be lost on the next deploy"
-            )
-        connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-        self.engine: Engine = create_engine(
-            _normalize_url(url), pool_pre_ping=True, connect_args=connect_args
-        )
-        if self.engine.dialect.name == "sqlite":
-            from sqlalchemy import event
-
-            @event.listens_for(self.engine, "connect")
-            def _fk_on(dbapi_conn, _record):
-                dbapi_conn.execute("PRAGMA foreign_keys=ON")
-
+    def __init__(self, url: str | None = None, *, engine: Engine | None = None):
+        self.engine: Engine = engine or make_engine(url)
         metadata.create_all(self.engine)
 
     def start_run(

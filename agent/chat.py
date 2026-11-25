@@ -21,6 +21,8 @@ import newrelic.agent
 
 import cost_tracker
 import scope
+from pd_schema import PdPatch
+
 from . import artifacts, cache, observability
 from .classification import classify_query
 from .events import AgentEvent, Artifact, Done, Sources, TextDelta, TextReset, ToolResult
@@ -39,6 +41,7 @@ from .patch_counts import repair_patch
 from .patches import append_patches, strip_patch_blocks
 from .prompt import agent_system_prompt
 from .retrieval import chunks_to_sources
+from .sessions import SessionPatchStore
 from .store import RunRecorder, RunStore
 from .tools import ToolRegistry
 from .tools.docs import default_tools
@@ -134,9 +137,49 @@ def default_config(
 
 
 def _finish_patches(workspace: PatchWorkspace, chunks: list[Chunk]) -> None:
-    """Correct the diagrams' counts against the excerpts this run retrieved."""
+    """Correct the diagrams this run wrote against the excerpts it retrieved.
+
+    Earlier turns' patches are left alone: this run's excerpts are evidence about
+    the question that was asked now, not about a patch from another turn.
+    """
     for entry in workspace.entries.values():
-        entry.patch = repair_patch(entry.patch, chunks)
+        if entry.touched:
+            entry.patch = repair_patch(entry.patch, chunks)
+
+
+def _adopt_cached_patches(
+    store: SessionPatchStore,
+    session_id: str,
+    cached: Collection[dict],
+    workspace: PatchWorkspace | None,
+) -> list[dict]:
+    """Save a cached answer's patches into this session and return their current data.
+
+    The response cache is keyed by question and shared between sessions, so a
+    cached artifact's ids belong to whichever session filled the cache. Re-saving
+    under the current session mints ids for this session; a patch the session
+    already has keeps its newer revision instead of being overwritten by the
+    cached copy.
+    """
+    ws = workspace or PatchWorkspace()
+    store.seed_workspace(session_id, ws)
+    names: list[str] = []
+    for item in cached:
+        name = str(item.get("name") or "")
+        if not name:
+            continue
+        names.append(name)
+        if name in ws.entries:
+            continue
+        try:
+            patch = PdPatch.model_validate(item.get("patch"))
+        except Exception:  # cached data is our own, but never fail an answer on it
+            logger.warning("skipping malformed cached patch %r", name)
+            continue
+        entry = ws.write(name, patch)
+        entry.revisions = max(1, int(item.get("revision") or 1))
+    store.save_workspace(session_id, ws)
+    return [ws.entries[name].to_artifact() for name in names if name in ws.entries]
 
 
 async def answer_question(
@@ -211,8 +254,14 @@ async def stream_chat(
     run_id: str | None = None,
     session_id: str | None = None,
     run_store: RunStore | None = None,
+    patch_store: SessionPatchStore | None = None,
 ) -> AsyncIterator[AgentEvent]:
-    """Answer one question, yielding the typed event stream ending in ``done``."""
+    """Answer one question, yielding the typed event stream ending in ``done``.
+
+    With a ``patch_store`` the workspace is seeded from the patches already
+    stored for ``session_id`` and the ones written this turn are saved back, so a
+    follow-up can edit the previous turn's patch.
+    """
     history = list(history or [])
     run_id = run_id or uuid.uuid4().hex
     session_id = session_id or uuid.uuid4().hex
@@ -304,7 +353,14 @@ async def stream_chat(
             ev_text = TextDelta(hit.answer)
             await recorder.record(ev_text)
             yield ev_text
-            for item in hit.patches:
+            hit_patches = (
+                await asyncio.to_thread(
+                    _adopt_cached_patches, patch_store, session_id, hit.patches, workspace
+                )
+                if patch_store is not None
+                else list(hit.patches)
+            )
+            for item in hit_patches:
                 ev_art = Artifact(kind="pd_patch", data=item)
                 await recorder.record(ev_art)
                 yield ev_art
@@ -315,7 +371,7 @@ async def stream_chat(
                     yield ev_art
             ev_done = Done(
                 answer=hit.answer,
-                patches=hit.patches,
+                patches=tuple(hit_patches),
                 new_history=new_history[-HISTORY_MAX_OUTGOING:],
                 chunks=tuple(hit.chunks),
                 query_type=hit.query_type,
@@ -394,6 +450,10 @@ async def stream_chat(
         )
 
         workspace = workspace or PatchWorkspace()
+        if patch_store is not None:
+            # The session's existing patches come first, so the tools can read and
+            # edit them; only this turn's writes are persisted back later.
+            await asyncio.to_thread(patch_store.seed_workspace, session_id, workspace)
         effective_config = config or default_config(
             interface=interface, policy=policy, approved_tools=approved_tools,
         )
@@ -472,7 +532,13 @@ async def stream_chat(
         state = loop.state
         answer = state.answer
         _finish_patches(workspace, list(state.chunks))
-        patches = tuple(workspace.patches())
+        if patch_store is not None:
+            # Ids and download URLs come from the store, so persist before the
+            # artifacts are built.
+            await asyncio.to_thread(patch_store.save_workspace, session_id, workspace)
+        # Only the patches this turn wrote: earlier turns' patches were drawn
+        # under their own answers and are listed for the session instead.
+        patches = tuple(workspace.patches(answered_only=True))
         audio = tuple(workspace.audio())
         # The model tried to write a patch and never produced a valid one.
         patch_failed = rejected_patch and not patches

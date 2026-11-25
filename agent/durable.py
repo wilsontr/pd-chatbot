@@ -54,6 +54,7 @@ from .loop import BUDGET_MESSAGES, TURN_LIMIT_NOTE, AgentConfig
 from .patch_counts import repair_patch
 from .patches import strip_patch_blocks
 from .retrieval import chunks_to_sources
+from .sessions import SessionPatchStore
 from .store import RunStore, event_to_record
 from .tools import ToolOutcome, ToolRegistry
 from .types import Chunk, HistoryItem
@@ -89,13 +90,19 @@ class DurableRuntime:
     ]
     run_store: RunStore | None = None
     classify_fn: Callable[[str, list[HistoryItem]], dict[str, Any]] | None = None
+    #: Session patch store: the durable loop seeds its workspace from it and
+    #: saves the patches each run wrote back to it (TASK-5.12).
+    patch_store: SessionPatchStore | None = None
 
 
 _runtime: DurableRuntime | None = None
 _launched: bool = False
 
 
-def default_runtime(run_store: RunStore | None = None) -> DurableRuntime:
+def default_runtime(
+    run_store: RunStore | None = None,
+    patch_store: SessionPatchStore | None = None,
+) -> DurableRuntime:
     """Production runtime wired to Anthropic, default tools, and classifier."""
     from .chat import default_config, default_registry
     from .classification import classify_query
@@ -110,6 +117,7 @@ def default_runtime(run_store: RunStore | None = None) -> DurableRuntime:
         ),
         run_store=run_store,
         classify_fn=classify_query,
+        patch_store=patch_store,
     )
 
 
@@ -273,6 +281,15 @@ def _step_init_run(
         "answer": "",
         "scope_note": scope_note,
     }
+
+
+@DBOS.step()
+def _step_load_session_patches(session_id: str) -> dict[str, Any]:
+    """Checkpoint the session's stored patches so the run edits them, not new ones."""
+    store = get_runtime().patch_store
+    if store is None:
+        return {}
+    return store.load_workspace(session_id).to_snapshot()
 
 
 @DBOS.step()
@@ -629,8 +646,12 @@ def _step_finish_run(
     """Repair patches, emit artifacts + Done, and finalize the RunStore row."""
     workspace = PatchWorkspace.from_snapshot(workspace_snapshot)
     for entry in workspace.entries.values():
-        entry.patch = repair_patch(entry.patch, chunks)
-    patches = tuple(workspace.patches())
+        if entry.touched:
+            entry.patch = repair_patch(entry.patch, chunks)
+    patch_store = get_runtime().patch_store
+    if patch_store is not None:
+        patch_store.save_workspace(session_id, workspace)
+    patches = tuple(workspace.patches(answered_only=True))
     audio = tuple(workspace.audio())
 
     seq = start_seq
@@ -776,7 +797,7 @@ async def durable_agent_workflow(
         {"role": "user", "content": user_content}
     ]
 
-    workspace_snapshot: dict[str, Any] = {}
+    workspace_snapshot: dict[str, Any] = _step_load_session_patches(session_id)
     chunks: list[Chunk] = []
     usage_totals: dict[str, int] = {}
     total_tokens = 0

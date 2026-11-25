@@ -3,12 +3,13 @@
 Everything a request needs, with no web framework, no SSE and no provider SDK
 event types leaking out:
 
-===============  ==========================================================
-``agent.loop``   the hand-written tool-use loop; yields typed events
-``agent.tools``  the tool contract and registry (``tools.docs`` = search_docs)
-``agent.chat``   request orchestration: cache, scope gate, guardrails, artifacts
-``agent.events`` the typed event stream every interface adapts
-===============  ==========================================================
+=================  ==========================================================
+``agent.loop``     the hand-written tool-use loop; yields typed events
+``agent.tools``    the tool contract and registry (``tools.docs`` = search_docs)
+``agent.chat``     request orchestration: cache, scope gate, guardrails, artifacts
+``agent.sessions`` the patches stored per conversation, for follow-up edits
+``agent.events``   the typed event stream every interface adapts
+=================  ==========================================================
 
 Importing the event types is cheap (no Chroma index, no API client); the heavier
 entry points are resolved lazily, so ``import agent`` in a test or a CLI stays
@@ -65,6 +66,8 @@ _LAZY: dict[str, str] = {
     "AgentConfig": "agent.loop",
     "AgentLoop": "agent.loop",
     "LoopState": "agent.loop",
+    # agent.sessions
+    "SessionPatchStore": "agent.sessions",
     # agent.store
     "RunRecorder": "agent.store",
     "RunStore": "agent.store",
@@ -105,6 +108,7 @@ __all__ = [
     "RunRecorder",
     "RunStore",
     "SearchDocsTool",
+    "SessionPatchStore",
     "Source",
     "Sources",
     "TextDelta",

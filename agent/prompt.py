@@ -119,6 +119,23 @@ _PATCH_TOOL_RULES = (
     "Do not write a patch when merely mentioning individual objects without a connection.\n"
 )
 
+# Patches persist for the whole conversation (TASK-5.12), so a follow-up can edit
+# the previous turn's patch instead of writing a second one.
+_SESSION_PATCH_RULES = (
+    "\n\nPatches from earlier in the conversation\n"
+    "- The patches you wrote in earlier turns are stored for this conversation, with an id "
+    "and a revision. Follow-ups such as \"make it resonant\" or \"now lower the pitch\" edit "
+    "the patch the user means; do not start a new one.\n"
+    "- Call `list_patches` when the user refers to a patch from an earlier turn or when you "
+    "need its id, then call `read_patch` to load that patch: your earlier patch JSON is not "
+    "in the conversation history.\n"
+    "- Write the edited patch with `write_patch`, passing the id from `read_patch` and the "
+    "same name. That replaces the stored patch (the revision goes up) and keeps one patch "
+    "in the conversation instead of two near-duplicates.\n"
+    "- Only start a new patch (a new name) when the user asks for a different patch rather "
+    "than a change to the existing one.\n"
+)
+
 # Rules for the tool-use loop. Appended to the shipped prompt rather than
 # replacing it, so the rest of the answer contract is identical in both modes.
 _TOOL_RULES = (
@@ -206,7 +223,8 @@ _EXECUTION_RULES = (
 
 def agent_system_prompt(*, execution: bool) -> str:
     return (
-        _ANSWER_RULES + _PATCH_TOOL_RULES + _PROSE_CHAIN_RULE + _TOOL_RULES
+        _ANSWER_RULES + _PATCH_TOOL_RULES + _SESSION_PATCH_RULES + _PROSE_CHAIN_RULE
+        + _TOOL_RULES
         + (_EXECUTION_RULES if execution else _NO_EXECUTION_RULES)
     )
 

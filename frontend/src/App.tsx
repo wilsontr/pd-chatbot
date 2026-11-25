@@ -7,6 +7,7 @@ import { useChat } from './hooks/useChat'
 import { useInputHistory } from './hooks/useInputHistory'
 import { MessageBubble } from './components/MessageBubble'
 import { EmptyState } from './components/EmptyState'
+import { SessionPatches } from './components/SessionPatches'
 import { RunListPage } from './components/RunListPage'
 import { RunTimelinePage } from './components/RunTimelinePage'
 import { parseRoute, runPath, runsPath, type AppRoute } from './lib/routes'
@@ -17,7 +18,7 @@ export default function App() {
   const [route, setRoute] = useState<AppRoute>(() =>
     parseRoute(window.location.pathname, window.location.search),
   )
-  const { messages, loading, streaming, send } = useChat()
+  const { messages, loading, streaming, send, sessionId, patchVersion } = useChat()
   const inputHistory = useInputHistory()
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -179,6 +180,8 @@ export default function App() {
               <div ref={bottomRef} />
             </div>
           </ScrollArea>
+
+          <SessionPatches sessionId={sessionId} version={patchVersion} />
 
           <form onSubmit={handleSubmit} className="border-t-2 border-[#d0d0d0] dark:border-[#3a3a3a] bg-[#f0f0f0] dark:bg-[#2a2a2a] px-4 py-3 shrink-0">
             <div className="max-w-[816px] mx-auto flex items-end gap-2">

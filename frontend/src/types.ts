@@ -10,6 +10,22 @@ export interface Source {
 export interface PatchArtifact {
   name: string
   patch: PdPatch
+  /** Stored id of the session patch; survives revisions. */
+  id?: string
+  /** How many times the agent has written this patch in the session. */
+  revision?: number
+  /** GET path for the latest revision as a .pd file. */
+  pd_url?: string
+}
+
+/** One patch stored for the conversation, from GET /sessions/{id}/patches. */
+export interface SessionPatch {
+  id: string
+  name: string
+  revision: number
+  boxes: number
+  updated_at: string | null
+  pd_url: string
 }
 
 /** A rendered audio clip from a sandboxed Pd run, paired with a patch by name. */

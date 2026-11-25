@@ -1,11 +1,15 @@
-"""The patches one request has written, shared by its patch tools."""
+"""The patches one request can edit, shared by its patch tools.
 
+Within a request this holds the latest revision the agent wrote; across requests
+``agent.sessions.SessionPatchStore`` seeds it from the conversation and saves
+back what changed, so a follow-up edits the existing patch (TASK-5.12).
+"""
 from __future__ import annotations
 
 import base64
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from pd_schema import PdPatch
 from sandbox.runner import SandboxResult
@@ -38,11 +42,36 @@ class PatchEntry:
     patch: PdPatch
     revisions: int = 1
     run: PatchRun | None = None  # of the current revision
+    #: Set when the patch is stored for a session (``agent.sessions``).
+    patch_id: str | None = None
+    #: Downloads the latest revision of ``patch_id`` as a .pd file.
+    pd_url: str | None = None
+    #: Written or repaired in the current run, so it belongs in this answer
+    #: and must be persisted.
+    touched: bool = False
+
+    def to_artifact(self) -> dict[str, Any]:
+        """The ``pd_patch`` artifact shape: the diagram plus how to get its .pd."""
+        data: dict[str, Any] = {
+            "name": self.name,
+            "patch": self.patch.model_dump(),
+            "revision": self.revisions,
+        }
+        if self.patch_id is not None:
+            data["id"] = self.patch_id
+        if self.pd_url is not None:
+            data["pd_url"] = self.pd_url
+        return data
 
 
 @dataclass
 class PatchWorkspace:
-    """Latest revision of each patch, in the order they were first written."""
+    """Latest revision of each patch, in the order they were first written.
+
+    Within a request the agent edits what it wrote; across requests
+    ``agent.sessions.SessionPatchStore`` seeds the workspace from the session
+    and writes back the entries marked ``touched``.
+    """
 
     entries: dict[str, PatchEntry] = field(default_factory=dict)
     runs: int = 0
@@ -50,15 +79,41 @@ class PatchWorkspace:
     def write(self, name: str, patch: PdPatch) -> PatchEntry:
         entry = self.entries.get(name)
         if entry is None:
-            entry = self.entries[name] = PatchEntry(name, patch)
+            entry = self.entries[name] = PatchEntry(name, patch, touched=True)
         else:
             entry.patch = patch
             entry.revisions += 1
             entry.run = None
+            entry.touched = True
         return entry
 
-    def patches(self) -> list[dict[str, Any]]:
-        return [{"name": e.name, "patch": e.patch.model_dump()} for e in self.entries.values()]
+    def seed(self, entries: Iterable[PatchEntry]) -> None:
+        """Add stored patches without replacing anything already written."""
+        for entry in entries:
+            self.entries.setdefault(entry.name, entry)
+
+    def find(self, patch_id_or_name: str) -> PatchEntry | None:
+        """Look a patch up by name, or by the id a stored patch was given."""
+        entry = self.entries.get(patch_id_or_name)
+        if entry is not None:
+            return entry
+        for candidate in self.entries.values():
+            if candidate.patch_id is not None and candidate.patch_id == patch_id_or_name:
+                return candidate
+        return None
+
+    def patches(self, *, answered_only: bool = False) -> list[dict[str, Any]]:
+        """Artifact data for every patch, or only the ones this answer is about.
+
+        With ``answered_only`` a patch is included when this run wrote or
+        repaired it, or ran it (a run's audio is part of the answer). Patches
+        seeded from an earlier turn are left out unless they changed.
+        """
+        return [
+            entry.to_artifact()
+            for entry in self.entries.values()
+            if not answered_only or entry.touched or entry.run is not None
+        ]
 
     def audio(self) -> list[dict[str, Any]]:
         """Store the audio of each patch's current revision; silence is left out."""
@@ -128,6 +183,9 @@ class PatchWorkspace:
                 "patch": entry.patch.model_dump(),
                 "revisions": entry.revisions,
                 "run": run_data,
+                "patch_id": entry.patch_id,
+                "pd_url": entry.pd_url,
+                "touched": entry.touched,
             })
         return {"runs": self.runs, "entries": serialized_entries}
 
@@ -166,5 +224,8 @@ class PatchWorkspace:
                 patch=patch,
                 revisions=int(item.get("revisions", 1)),
                 run=run_obj,
+                patch_id=item.get("patch_id"),
+                pd_url=item.get("pd_url"),
+                touched=bool(item.get("touched", False)),
             )
         return ws

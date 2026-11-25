@@ -92,9 +92,11 @@ same measurement was ~4.7 s to first token). Responses may include:
 
 - Inline `[object~]` references in code spans
 - Markdown tables for structured object comparisons
-- **Pd patch diagrams** — when a concrete signal chain is described, the model emits a `pd-patch` JSON block that the frontend renders as an SVG diagram matching the Pd editor's visual style. Patch JSON is validated server-side with Pydantic and retried on failure (see [Quality](#quality)).
+- **Pd patch diagrams** — when a concrete signal chain is described, the model calls the `write_patch` tool with PdPatch JSON; the frontend renders it as an SVG diagram matching the Pd editor's visual style. Patch JSON is validated server-side with Pydantic before it is saved (see [Quality](#quality)).
 
-The SVG renderer supports all standard Pd box types: `obj` (rectangle), `msg` (notched right edge), `floatatom` (corner-cut number box), `comment` (text label), `table`/`array` (named data stores), and UI widgets (`bng`, `tgl`, `hsl`, `vsl`, etc.). Inlet and outlet nubs and patch cords are drawn automatically; layout is computed with [dagre](https://github.com/dagrejs/dagre). Each diagram can be downloaded as a `.pd` file (`POST /patch/pd`, serialized by [`pd_file.py`](pd_file.py)). Its tests load patches in headless Pd, and are skipped locally when Pd is not installed; set `PD_BIN` to point at a binary that is not on the path. When `PD_SANDBOX_BACKEND` is set, the agent runs the patches it writes, measures their audio and fixes them before answering ([results](docs/PATCH_EVAL.md)). Untrusted patches can be run and rendered to audio in a locked-down container; see [SANDBOX.md](docs/SANDBOX.md).
+The SVG renderer supports all standard Pd box types: `obj` (rectangle), `msg` (notched right edge), `floatatom` (corner-cut number box), `comment` (text label), `table`/`array` (named data stores), and UI widgets (`bng`, `tgl`, `hsl`, `vsl`, etc.). Inlet and outlet nubs and patch cords are drawn automatically; layout is computed with [dagre](https://github.com/dagrejs/dagre). Each diagram can be downloaded as a `.pd` file (serialized by [`pd_file.py`](pd_file.py)). Its tests load patches in headless Pd, and are skipped locally when Pd is not installed; set `PD_BIN` to point at a binary that is not on the path. When `PD_SANDBOX_BACKEND` is set, the agent runs the patches it writes, measures their audio and fixes them before answering ([results](docs/PATCH_EVAL.md)). Untrusted patches can be run and rendered to audio in a locked-down container; see [SANDBOX.md](docs/SANDBOX.md).
+
+Patches persist for the whole conversation: a follow-up like "make the filter resonant" loads the previous patch with `read_patch`, edits it with `write_patch`, and replaces it instead of starting over. Stored patches live in the same Postgres/SQLite database as the run log and keep a stable id across revisions. The agent finds them with `list_patches`; `GET /sessions/{session_id}/patches` lists them for a client, and `GET /sessions/{session_id}/patches/{patch_id}.pd` downloads the latest revision. Each diagram's download button uses that URL, so an answer from several turns ago still downloads the newest version, and the chat footer lists every patch in the session.
 
 ### Caching
 
@@ -413,10 +415,10 @@ requires an HMAC-SHA256 signature over the payload, preventing replay attacks
 - [Voyage AI](https://www.voyageai.com/) — embeddings (`voyage-3-lite`)
 - [Anthropic Claude](https://www.anthropic.com/) — classification (`claude-haiku-4-5`) + generation (`claude-sonnet-4-6`)
 - [rank-bm25](https://github.com/dorianbrown/rank_bm25) — keyword search
-- slowapi — rate limiting (10/min `/chat`, 30/min `/feedback` and `/patch/pd`)
+- slowapi — rate limiting (10/min `/chat`, 30/min `/feedback`, `/patch/pd` and session-patch downloads, 60/min the artifact and session-patch list endpoints)
 - New Relic APM — request tracing, external call instrumentation (Anthropic, Voyage AI), cache hit/miss metrics, pd-patch validation failure tracking
 - [Langfuse](https://langfuse.com) (self-hosted on Railway) — LLM-native tracing: token accounting (input/output/cache-read), trace trees (classify → embed → retrieve → generate), cost attribution
-- Postgres (Railway) via SQLAlchemy — response and feedback store; falls back to a local SQLite file (`feedback.db`) when `DATABASE_URL` is unset
+- Postgres (Railway) via SQLAlchemy — response and feedback store, event-sourced run log, and per-session patches; falls back to a local SQLite file (`feedback.db`) when `DATABASE_URL` is unset
 
 **Frontend**
 - React 19 + TypeScript + Vite

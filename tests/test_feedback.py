@@ -91,7 +91,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CHAT_API_KEYS", API_KEY)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'api.db'}")
 
-    async def fake_stream(question, history, *, interface=None, session_id=None, run_store=None):
+    async def fake_stream(question, history, *, interface=None, session_id=None, run_store=None,
+                          patch_store=None):
         assert interface == "web"
         yield events.ToolCall(id="c1", name="search_docs", arguments={"query": "osc~"})
         yield events.ToolResult(

@@ -105,13 +105,18 @@ export function MessageBubble({
                 {message.content}
               </ReactMarkdown>
             )}
-            {message.patches?.map(({ name, patch }) => {
+            {message.patches?.map(({ name, patch, id, revision, pd_url }) => {
               const audio = audioByName.get(name)
               return (
-                <figure key={name} className="my-3">
-                  <figcaption className="text-xs text-muted-foreground mb-1">{name}</figcaption>
+                <figure key={id ?? name} className="my-3">
+                  <figcaption className="text-xs text-muted-foreground mb-1">
+                    {name}
+                    {revision !== undefined && revision > 1 && (
+                      <span className="ml-1.5">· revision {revision}</span>
+                    )}
+                  </figcaption>
                   <div className="flex flex-wrap items-start gap-3">
-                    <PdPatchViewer patch={patch} />
+                    <PdPatchViewer patch={patch} pdUrl={pd_url} filename={`${name}.pd`} />
                     {audio && <PatchAudioPlayer audio={audio} />}
                   </div>
                 </figure>

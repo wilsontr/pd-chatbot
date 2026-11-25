@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { downloadPatch } from '../lib/pdDownload'
+import { downloadPatch, downloadPatchUrl } from '../lib/pdDownload'
 import { layoutPatch, computeViewBox, graphicLabel } from '../lib/pdLayout'
 import type { LayoutNode } from '../lib/pdLayout'
 import type { PdPatch, PdObject } from '../types'
@@ -84,12 +84,23 @@ function boxFill(type: PdObject['type']): string {
   return type === 'array' ? '#fff' : '#dfdfdf'
 }
 
-function DownloadButton({ patch }: { patch: PdPatch }) {
+function DownloadButton({
+  patch,
+  pdUrl,
+  filename,
+}: {
+  patch: PdPatch
+  pdUrl?: string
+  filename?: string
+}) {
   const [state, setState] = useState<'idle' | 'busy' | 'failed'>('idle')
 
   async function handleClick() {
     setState('busy')
-    setState(await downloadPatch(patch) ? 'idle' : 'failed')
+    const ok = pdUrl
+      ? await downloadPatchUrl(pdUrl, filename ?? 'patch.pd')
+      : await downloadPatch(patch)
+    setState(ok ? 'idle' : 'failed')
   }
 
   return (
@@ -104,7 +115,16 @@ function DownloadButton({ patch }: { patch: PdPatch }) {
   )
 }
 
-export function PdPatchViewer({ patch }: { patch: PdPatch }) {
+export function PdPatchViewer({
+  patch,
+  pdUrl,
+  filename,
+}: {
+  patch: PdPatch
+  /** Latest-revision download path for a stored session patch. */
+  pdUrl?: string
+  filename?: string
+}) {
   const layout = layoutPatch(patch)
   const { w: svgW, h: svgH } = computeViewBox(layout)
   const objMap = new Map(patch.objects.map(o => [o.id, o]))
@@ -200,7 +220,7 @@ export function PdPatchViewer({ patch }: { patch: PdPatch }) {
         })}
       </svg>
     </div>
-    <DownloadButton patch={patch} />
+    <DownloadButton patch={patch} pdUrl={pdUrl} filename={filename} />
     </div>
   )
 }

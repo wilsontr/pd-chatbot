@@ -34,6 +34,9 @@ Priority order below. **Item 1 is the headline.**
 **Tools to expose:**
 
 - `write_patch(pd_patch)`: turns `PdPatch` JSON into a real `.pd` file.
+- `list_patches()` / `read_patch(id or name)`: list the patches stored for this
+  conversation and load one by id, so a follow-up edits the existing patch
+  instead of starting over (TASK-5.12).
 - `run_patch(path, seconds)`: runs Pd with no GUI, renders a WAV file and
   returns Pd's error output. Pd prints messages like "couldn't create" for
   objects it doesn't recognise, which makes a cheap, reliable check.
@@ -100,6 +103,22 @@ cache lives in memory (`TTLCache`). Three layers to add:
   follow-up like "make the filter resonant" edits an existing patch.
   Optionally, add per-user memory (Pd version, vanilla vs. Purr Data,
   preferred externals).
+
+*Done in TASK-5.9 and TASK-5.11: the event-sourced run log and DBOS-durable
+runs. Done in TASK-5.12: session patches. Each patch is stored under
+`(session_id, name)` in the `session_patches` table with a stable short id and a
+revision, using the same database as the run log. A request seeds its
+`PatchWorkspace` from the session before the loop starts and saves the patches it
+wrote at the end, so the tool list now includes `list_patches` and `read_patch`
+alongside `write_patch`; `write_patch` takes the stored id to replace a patch in
+place. Both the streaming path (`agent/chat.py`) and the durable path
+(`agent/durable.py`, with the seed as a checkpointed step) do this, and the seed
+survives a crash replay. `GET /sessions/{session_id}/patches` lists the patches
+and `GET /sessions/{session_id}/patches/{patch_id}.pd` serves the latest revision,
+which is what the chat UI's download button and session patch strip use. Only
+the patches a turn wrote are drawn under that turn's answer; the rest stay in the
+session. Rows unused for 30 days are pruned when a patch is next written. Per-user
+memory was not built.*
 
 **For the demo:** a "run timeline" page that replays a stored run step by step.
 

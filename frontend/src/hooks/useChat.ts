@@ -7,7 +7,9 @@ export function useChat() {
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([])
   const [loading, setLoading] = useState(false)
   const [streaming, setStreaming] = useState(false)
-  const sessionIdRef = useRef<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  // Bumped on every completed answer so the session patch list refetches.
+  const [patchVersion, setPatchVersion] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -55,7 +57,7 @@ export function useChat() {
         body: JSON.stringify({
           message: question,
           history: chatHistory,
-          ...(sessionIdRef.current ? { session_id: sessionIdRef.current } : {}),
+          ...(sessionId ? { session_id: sessionId } : {}),
         }),
         signal: controller.signal,
       })
@@ -83,8 +85,9 @@ export function useChat() {
           if (event.type === 'done') {
             sawDone = true
             if (event.session_id) {
-              sessionIdRef.current = event.session_id
+              setSessionId(event.session_id)
             }
+            setPatchVersion(version => version + 1)
             updateAssistant(last => applyStreamEvent(last, event))
             if (Array.isArray(event.history)) {
               setChatHistory(event.history)
@@ -135,5 +138,5 @@ export function useChat() {
     }
   }
 
-  return { messages, loading, streaming, send }
+  return { messages, loading, streaming, send, sessionId, patchVersion }
 }

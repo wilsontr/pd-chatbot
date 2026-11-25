@@ -32,6 +32,7 @@ from agent.durable import (
 from agent.events import ApprovalRequested, ApprovalResolved
 from agent.llm import ModelDelta, ModelTurn, ToolCallRequest
 from agent.loop import AgentConfig
+from agent.sessions import SessionPatchStore
 from agent.store import RunStore, event_from_record, event_to_record
 from agent.tools import ToolOutcome, ToolRegistry, ToolSpec
 from agent.tools.patch import WritePatchTool
@@ -717,3 +718,95 @@ class TestDurableHttpEndpoints:
             destroy_dbos()
             reset_runtime()
             sys.modules.pop("main", None)
+
+
+class TestSessionPatchWorkspace:
+    def test_a_durable_follow_up_edits_the_stored_patch(self, dbos_env):
+        """Two durable runs in one session: the second edits the stored patch."""
+        run_store, _ = dbos_env
+        patch_store = SessionPatchStore(engine=run_store.engine)
+        seen: list[str | None] = []
+
+        class SeededReadTool:
+            spec = ToolSpec(
+                name="read_patch", description="read", input_schema={"type": "object"}
+            )
+
+            def __init__(self, workspace):
+                self.workspace = workspace
+
+            def run(self, arguments):
+                entry = self.workspace.find(str(arguments.get("name") or ""))
+                seen.append(None if entry is None else entry.patch_id)
+                content = (
+                    json.dumps({"patch": entry.patch.model_dump()})
+                    if entry is not None else "no patch"
+                )
+                return ToolOutcome(content=content, summary="read bell")
+
+        def runtime_with(client):
+            return DurableRuntime(
+                client_factory=lambda: client,
+                tools_factory=lambda ws, iface, pol, approved: ToolRegistry([
+                    SeededReadTool(ws),
+                    WritePatchTool(ws),
+                ]),
+                config_factory=lambda iface, pol, approved: AgentConfig(max_turns=5),
+                run_store=run_store,
+                classify_fn=lambda q, h: IN_SCOPE,
+                patch_store=patch_store,
+            )
+
+        wire = {"srcId": "0", "srcOutlet": 0, "dstId": "1", "dstInlet": 0}
+        first_turns = [
+            {"tool_calls": [{"id": "c1", "name": "write_patch", "input": {
+                "name": "bell", "objects": OSC_OBJECTS, "connections": [wire],
+            }}]},
+            {"text": "Built the bell."},
+        ]
+        second_turns = [
+            {"tool_calls": [{"id": "c1", "name": "read_patch", "input": {"name": "bell"}}]},
+            {"tool_calls": [{"id": "c2", "name": "write_patch", "input": {
+                "name": "bell",
+                "objects": [
+                    {"id": "0", "type": "obj", "text": "osc~ 220",
+                     "inlets": 2, "outlets": 1},
+                    {"id": "1", "type": "obj", "text": "dac~",
+                     "inlets": 2, "outlets": 0},
+                ],
+                "connections": [wire],
+            }}]},
+            {"text": "Lowered it."},
+        ]
+
+        async def scenario():
+            set_runtime(runtime_with(IndexedScriptedClient(first_turns)))
+            _, _, handle = await start_durable_run(
+                "Build a bell", run_id="run-patch-1", session_id="sess-patch",
+                interface="web", pause_for_approval=False,
+            )
+            first = await handle.get_result()
+            stored = patch_store.list_for_session("sess-patch")[0]
+
+            set_runtime(runtime_with(IndexedScriptedClient(second_turns)))
+            _, _, handle = await start_durable_run(
+                "Lower it", run_id="run-patch-2", session_id="sess-patch",
+                interface="web", pause_for_approval=False,
+            )
+            second = await handle.get_result()
+            return first, second, stored
+
+        first, second, stored = asyncio.run(scenario())
+
+        # The second run's tools saw the first run's patch, id and all.
+        assert seen == [stored.patch_id]
+        assert first["patches"][0]["id"] == stored.patch_id
+        assert first["patches"][0]["revision"] == 1
+        # The edit replaced that patch instead of adding a second one.
+        assert second["patches"][0]["id"] == stored.patch_id
+        assert second["patches"][0]["revision"] == 2
+        assert second["patches"][0]["pd_url"] == stored.pd_url
+        listing = patch_store.list_for_session("sess-patch")
+        assert [item.name for item in listing] == ["bell"]
+        assert listing[0].revision == 2
+        assert listing[0].patch.objects[0].text == "osc~ 220"

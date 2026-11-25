@@ -554,7 +554,10 @@ def api_client(tmp_path, monkeypatch):
     )
 
     # Wire main.py against the real chat.stream_chat, stubbing only model/classifier/faithfulness.
-    async def wired_stream(question, history, *, interface="web", session_id=None, run_store=None):
+    async def wired_stream(
+        question, history, *, interface="web", session_id=None, run_store=None,
+        patch_store=None,
+    ):
         workspace = PatchWorkspace()
         tools = ToolRegistry([StubSearchTool(), WritePatchTool(workspace)])
         client = ScriptedClient(_multi_step_turns())

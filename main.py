@@ -15,6 +15,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from dotenv import load_dotenv
 load_dotenv()
@@ -45,6 +46,7 @@ from agent.durable import (
 from agent.events import Artifact, Done, Sources, TextDelta, TextReset, ToolCall, ToolResult
 from agent.observability import flush as flush_tracing
 from agent.patches import append_patches
+from agent.sessions import SessionPatchStore
 from agent.store import RunStore
 from feedback_store import FeedbackStore, UnknownMessageError
 from pd_file import to_pd
@@ -71,7 +73,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 def _ensure_dbos() -> None:
     if not is_dbos_launched():
-        set_runtime(default_runtime(run_store=run_store))
+        set_runtime(default_runtime(run_store=run_store, patch_store=patch_store))
         launch_dbos()
 
 
@@ -129,6 +131,9 @@ def _verify_hmac(payload_signature: str, key: str) -> bool:
 # --- Persistent stores (Postgres via DATABASE_URL, SQLite locally) ---
 feedback_store = FeedbackStore()
 run_store = RunStore()
+# Session patches live in the same database as the run log, so a follow-up can
+# edit the previous turn's patch and a download survives a restart.
+patch_store = SessionPatchStore(engine=run_store.engine)
 
 # --- Request / response models ---
 class HistoryItem(BaseModel):
@@ -200,6 +205,7 @@ async def chat_endpoint(request: Request, req: ChatRequest):
             interface="web",
             session_id=req.session_id,
             run_store=run_store,
+            patch_store=patch_store,
         ):
             if isinstance(event, Sources):
                 # The browser creates the assistant message on `meta`, so this
@@ -286,6 +292,48 @@ async def artifact_endpoint(request: Request, artifact_id: str):
         raise HTTPException(status_code=404, detail="Unknown or expired artifact")
     return Response(
         stored.data, media_type=stored.mime, headers={"Cache-Control": "private, max-age=3600"}
+    )
+
+
+_PATCH_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_PD_FILENAME_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _check_session_id(session_id: str) -> None:
+    if not session_id or len(session_id) > 128:
+        raise HTTPException(status_code=404, detail="Unknown session")
+
+
+@app.get("/sessions/{session_id}/patches", dependencies=[Depends(require_api_key)])
+@limiter.limit("60/minute")
+async def session_patches_endpoint(request: Request, session_id: str):
+    """Every patch stored for a conversation, with its id and latest revision."""
+    _check_session_id(session_id)
+    items = await asyncio.to_thread(patch_store.list_for_session, session_id)
+    return {
+        "session_id": session_id,
+        "patches": [item.to_dict() for item in items],
+    }
+
+
+@app.get(
+    "/sessions/{session_id}/patches/{patch_id}.pd",
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit("30/minute")
+async def session_patch_pd_endpoint(request: Request, session_id: str, patch_id: str):
+    """Download the latest revision of one session patch as a .pd file."""
+    _check_session_id(session_id)
+    if not _PATCH_ID_RE.fullmatch(patch_id):
+        raise HTTPException(status_code=404, detail="Unknown patch")
+    stored = await asyncio.to_thread(patch_store.get, session_id, patch_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Unknown patch")
+    filename = _PD_FILENAME_UNSAFE_RE.sub("_", stored.name) or "patch"
+    return Response(
+        to_pd(stored.patch),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.pd"'},
     )
 
 

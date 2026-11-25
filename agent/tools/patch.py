@@ -1,7 +1,10 @@
-"""Patch tools: ``write_patch``, ``run_patch`` and ``analyze_audio``.
+"""Patch tools: ``list_patches``, ``read_patch``, ``write_patch``, ``run_patch``
+and ``analyze_audio``.
 
-``write_patch`` is how every patch reaches the user. The other two need the
-sandbox (docs/SANDBOX.md) and are only offered when execution is enabled.
+``write_patch`` is how every patch reaches the user. ``list_patches`` and
+``read_patch`` expose the patches stored for the conversation session so a
+follow-up can edit one instead of starting over (TASK-5.12). The last two need
+the sandbox (docs/SANDBOX.md) and are only offered when execution is enabled.
 """
 
 from __future__ import annotations
@@ -28,13 +31,19 @@ logger = logging.getLogger(__name__)
 MAX_RUN_SECONDS = 10.0
 DEFAULT_RUN_SECONDS = 2.0
 MAX_RUNS = 6
-MAX_PATCHES = 4
+#: A session keeps its patches across turns, so this is a ceiling on the whole
+#: conversation workspace rather than on one answer.
+MAX_PATCHES = 12
 MAX_INPUTS = 8
 _MAX_CONSOLE_CHARS = 3000
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 _NAME_SCHEMA = {
     "type": "string",
     "description": "Short lower-case slug for the patch, such as 'fm-bell'.",
+}
+_ID_SCHEMA = {
+    "type": "string",
+    "description": "A patch's stored id, from `list_patches` or `read_patch`.",
 }
 _NO_INLET_TYPES = {"comment", "cnv", "table"}
 _VERBOSE_RE = re.compile(r"^verbose\(\d+\): ")
@@ -115,16 +124,103 @@ class _PatchTool:
         self.workspace = workspace
 
     def _entry(self, arguments: Mapping[str, Any]) -> PatchEntry | ToolOutcome:
-        name = str(arguments.get("name") or "")
-        entry = self.workspace.entries.get(name)
+        key = str(arguments.get("id") or arguments.get("name") or "")
+        if not key:
+            return _failure(
+                "Pass the patch's id (from `list_patches`) or the name it was written under."
+            )
+        entry = self.workspace.find(key)
         if entry is not None:
             return entry
-        known = ", ".join(self.workspace.entries) or "none yet"
-        return _failure(f"There is no patch named {name!r}. Patches written: {known}.")
+        known = ", ".join(
+            f"{e.patch_id} ({e.name})" if e.patch_id else e.name
+            for e in self.workspace.entries.values()
+        ) or "none yet"
+        return _failure(
+            f"There is no patch with id or name {key!r}. Patches in this session: {known}."
+        )
 
 
 def _failure(message: str, **data: Any) -> ToolOutcome:
     return ToolOutcome(content=message, summary=message[:120], ok=False, data=data)
+
+
+class ListPatchesTool(_PatchTool):
+    spec = ToolSpec(
+        name="list_patches",
+        description=(
+            "List the patches stored for this conversation, with each patch's id, name and "
+            "revision. Use it when the user refers to a patch from an earlier turn, before "
+            "reading or changing it."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    )
+
+    def run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
+        items = [
+            {
+                "id": entry.patch_id,
+                "name": entry.name,
+                "revision": entry.revisions,
+                "boxes": len(entry.patch.objects),
+            }
+            for entry in self.workspace.entries.values()
+        ]
+        if not items:
+            return ToolOutcome(
+                content="No patches have been written in this conversation yet.",
+                summary="no stored patches",
+                data={"patches": []},
+            )
+        return ToolOutcome(
+            content=json.dumps({"patches": items}),
+            summary=f"{len(items)} patch{'es' if len(items) != 1 else ''} in this session",
+            data={"patches": items},
+        )
+
+
+class ReadPatchTool(_PatchTool):
+    spec = ToolSpec(
+        name="read_patch",
+        description=(
+            "Load a patch stored in this conversation — by id, or by the name it was "
+            "written under — with its full objects and connections. Your earlier patch "
+            "JSON is not in the conversation history, so read a patch before editing it."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "id": _ID_SCHEMA,
+                "name": _NAME_SCHEMA,
+            },
+            "additionalProperties": False,
+        },
+    )
+
+    def run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
+        entry = self._entry(arguments)
+        if isinstance(entry, ToolOutcome):
+            return entry
+        content = json.dumps({
+            "id": entry.patch_id,
+            "name": entry.name,
+            "revision": entry.revisions,
+            "patch": entry.patch.model_dump(),
+        })
+        return ToolOutcome(
+            content=content,
+            summary=f"read {entry.name} (rev {entry.revisions}, {len(entry.patch.objects)} boxes)",
+            data={
+                "name": entry.name,
+                "id": entry.patch_id,
+                "revision": entry.revisions,
+                "boxes": len(entry.patch.objects),
+            },
+        )
 
 
 class WritePatchTool(_PatchTool):
@@ -133,13 +229,15 @@ class WritePatchTool(_PatchTool):
         output_only=True,
         description=(
             "Write a Pd patch. This is the only way to give the user a patch: it is drawn "
-            "as a diagram under your answer and can be downloaded as a .pd file. Writing to "
-            "a name you already used replaces that patch. Keep patches to 15 boxes; for a "
+            "as a diagram under your answer and can be downloaded as a .pd file. Pass the "
+            "`id` of a stored patch (from `list_patches`) to replace it in place, or reuse "
+            "its name; a new name starts a new patch. Keep patches to 15 boxes; for a "
             "larger one, write the key signal path."
         ),
         input_schema={
             "type": "object",
             "properties": {
+                "id": _ID_SCHEMA,
                 "name": _NAME_SCHEMA,
                 "objects": {
                     "type": "array",
@@ -179,15 +277,35 @@ class WritePatchTool(_PatchTool):
                     },
                 },
             },
-            "required": ["name", "objects", "connections"],
+            "required": ["objects", "connections"],
             "additionalProperties": False,
         },
     )
 
     def run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
+        patch_id = str(arguments.get("id") or "")
         name = str(arguments.get("name") or "")
-        if not _NAME_RE.fullmatch(name):
-            return _failure("name must be a lower-case slug such as 'fm-bell'.")
+        existing: PatchEntry | None = None
+        if patch_id:
+            existing = self.workspace.find(patch_id)
+            if existing is None:
+                known = ", ".join(
+                    f"{e.patch_id} ({e.name})"
+                    for e in self.workspace.entries.values() if e.patch_id
+                ) or "none yet"
+                return _failure(
+                    f"There is no patch with id {patch_id!r} in this session. "
+                    f"Stored patch ids: {known}."
+                )
+            # The stored name is the patch's identity; the id only says which one.
+            name = existing.name
+        else:
+            if not _NAME_RE.fullmatch(name):
+                return _failure(
+                    "name must be a lower-case slug such as 'fm-bell', or pass the id of an "
+                    "existing patch."
+                )
+            existing = self.workspace.entries.get(name)
         try:
             patch = PdPatch.model_validate({
                 "objects": arguments.get("objects"),
@@ -210,13 +328,19 @@ class WritePatchTool(_PatchTool):
                 f"The patch was not saved: connections use unknown ids {', '.join(missing)}.",
                 invalid_patch=True,
             )
-        if name not in self.workspace.entries and len(self.workspace.entries) >= MAX_PATCHES:
-            return _failure(f"At most {MAX_PATCHES} patches per answer; replace one instead.")
+        if existing is None and len(self.workspace.entries) >= MAX_PATCHES:
+            return _failure(
+                f"At most {MAX_PATCHES} patches per conversation; replace one of the "
+                "existing patches instead."
+            )
         entry = self.workspace.write(name, patch)
+        data: dict[str, Any] = {"name": name, "revision": entry.revisions}
+        if entry.patch_id is not None:
+            data["id"] = entry.patch_id
         return ToolOutcome(
             content=f"Saved patch {name!r} (revision {entry.revisions}).",
             summary=f"wrote {name} ({len(ids)} boxes)",
-            data={"name": name, "revision": entry.revisions},
+            data=data,
         )
 
 
@@ -232,6 +356,7 @@ class RunPatchTool(_PatchTool):
         input_schema={
             "type": "object",
             "properties": {
+                "id": _ID_SCHEMA,
                 "name": _NAME_SCHEMA,
                 "seconds": {
                     "type": "number",
@@ -256,7 +381,6 @@ class RunPatchTool(_PatchTool):
                     },
                 },
             },
-            "required": ["name"],
             "additionalProperties": False,
         },
     )
@@ -335,8 +459,10 @@ class AnalyzeAudioTool(_PatchTool):
         ),
         input_schema={
             "type": "object",
-            "properties": {"name": _NAME_SCHEMA},
-            "required": ["name"],
+            "properties": {
+                "id": _ID_SCHEMA,
+                "name": _NAME_SCHEMA,
+            },
             "additionalProperties": False,
         },
     )
@@ -364,7 +490,11 @@ class AnalyzeAudioTool(_PatchTool):
 
 
 def patch_tools(workspace: PatchWorkspace, *, execution: bool) -> list[Tool]:
-    tools: list[Tool] = [WritePatchTool(workspace)]
+    tools: list[Tool] = [
+        ListPatchesTool(workspace),
+        ReadPatchTool(workspace),
+        WritePatchTool(workspace),
+    ]
     if execution:
         tools += [RunPatchTool(workspace), AnalyzeAudioTool(workspace)]
     return tools

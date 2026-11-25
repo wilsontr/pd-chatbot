@@ -20,8 +20,11 @@ from agent.llm import ModelDelta, ModelTurn, ToolCallRequest
 from agent.loop import AgentLoop
 from agent.tools import ToolOutcome, ToolRegistry, ToolSpec
 from agent.tools.patch import (
+    MAX_PATCHES,
     MAX_RUNS,
     AnalyzeAudioTool,
+    ListPatchesTool,
+    ReadPatchTool,
     RunPatchTool,
     WritePatchTool,
     clean_console,
@@ -110,9 +113,11 @@ class TestWrite:
             assert set(props[field]["items"]["properties"]) == set(expected)
 
     def test_patch_count_is_capped(self, workspace):
-        for i in range(4):
+        for i in range(MAX_PATCHES):
             written(workspace, name=f"p{i}")
-        assert not WritePatchTool(workspace).run({**ARGS, "name": "p4"}).ok
+        assert not WritePatchTool(workspace).run({**ARGS, "name": "p99"}).ok
+        # The cap is on new names; editing one of the stored patches still works.
+        assert WritePatchTool(workspace).run({**ARGS, "name": "p3"}).ok
 
 
 class TestRun:
@@ -296,11 +301,13 @@ class TestArtifacts:
 class TestRegistry:
     def test_execution_follows_configuration(self, monkeypatch):
         monkeypatch.delenv("PD_SANDBOX_BACKEND", raising=False)
-        assert chat.default_registry().names() == ["search_docs", "write_patch"]
+        assert chat.default_registry().names() == [
+            "search_docs", "list_patches", "read_patch", "write_patch"]
         assert "run_patch" not in chat.default_config().system_prompt
         monkeypatch.setenv("PD_SANDBOX_BACKEND", "modal")
         assert chat.default_registry().names() == [
-            "search_docs", "write_patch", "run_patch", "analyze_audio"]
+            "search_docs", "list_patches", "read_patch", "write_patch",
+            "run_patch", "analyze_audio"]
         assert "run_patch" in chat.default_config().system_prompt
 
 
