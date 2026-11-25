@@ -54,7 +54,23 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 EVAL_MODES = ("pipeline", "agent", "both")
 
+# Per-task pass floor on the 1-5 judge scale: an entry counts as a task success
+# when every scored dimension meets this floor and no error-severity claim check
+# fires. Captures per-entry failures that aggregate means can smooth over.
+TASK_SUCCESS_MIN_SCORE = 4
+
 _AGENT_LABEL_SUFFIX = " (agent)"
+
+
+def _is_task_success(
+    scores: dict[str, Any], claim_violations: list[dict[str, Any]]
+) -> bool:
+    """True when all judge dimensions meet the pass floor with 0 claim errors."""
+    for dim in ("faithfulness", "relevance", "citation_correctness"):
+        val = (scores.get(dim) or {}).get("score")
+        if not isinstance(val, (int, float)) or val < TASK_SUCCESS_MIN_SCORE:
+            return False
+    return not any(v.get("severity") != claims.WARNING for v in claim_violations)
 
 _deepseek_client: openai.OpenAI | None = None
 
@@ -231,6 +247,8 @@ def run_generation_eval(
         label: {} for label in labels.values()
     }
     skipped: dict[str, int] = {label: 0 for label in labels.values()}
+    skipped_with_errors: dict[str, int] = {label: 0 for label in labels.values()}
+    run_errors: dict[str, int] = {label: 0 for label in labels.values()}
 
     def record(
         entry: GoldenEntry,
@@ -251,6 +269,7 @@ def run_generation_eval(
             v.as_dict()
             for v in claims.check_answer(entry.id, answer, chunks or [])
         ]
+        task_success = _is_task_success(scores, violations)
         results[label].append({
             "entry_id": entry.id,
             "model": m,
@@ -261,6 +280,7 @@ def run_generation_eval(
             "usage": usage,
             "latency_ms": round(latency_ms, 1),
             "claim_violations": violations,
+            "task_success": task_success,
             **extra,
         })
         if verbose:
@@ -330,11 +350,17 @@ def run_generation_eval(
                                   f"{len(chunks)} chunks, {result.tool_calls} tool calls)")
                     except Exception as exc:
                         logger.error("Agent run failed for %s with %s: %s", entry.id, m, exc)
+                        run_errors[label] += 1
                         continue
+                    tool_errors = int(getattr(result, "tool_errors", 0) or 0)
+                    recovered_errors = int(getattr(result, "recovered_errors", 0) or 0)
+                    unresolved_errors = int(getattr(result, "unresolved_errors", 0) or 0)
                     if not chunks:
                         if verbose:
                             print("  SKIP — the agent retrieved no chunks")
                         skipped[label] += 1
+                        if tool_errors > 0:
+                            skipped_with_errors[label] += 1
                         continue
                     # answer_question already repairs counts on the shipped path;
                     # applying it here too keeps the eval's two arms symmetric
@@ -353,7 +379,10 @@ def run_generation_eval(
                            chunks_retrieved=len(chunks),
                            tool_calls=result.tool_calls,
                            retrieval_calls=result.retrieval_calls,
-                           turns=result.turns)
+                           turns=result.turns,
+                           tool_errors=tool_errors,
+                           recovered_errors=recovered_errors,
+                           unresolved_errors=unresolved_errors)
 
     # Aggregate
     summary: dict[str, Any] = {"per_model": {}, "mode": mode}
@@ -362,6 +391,14 @@ def run_generation_eval(
         model_summary: dict[str, Any] = {"n": len(entries_list), "mode": arm}
         if skipped.get(label):
             model_summary["skipped_no_context"] = skipped[label]
+        if run_errors.get(label):
+            model_summary["run_errors"] = run_errors[label]
+        task_attempts = len(entries_list) + skipped.get(label, 0) + run_errors.get(label, 0)
+        if task_attempts:
+            task_successes = sum(1 for e in entries_list if e.get("task_success"))
+            model_summary["task_success_count"] = task_successes
+            model_summary["task_attempts"] = task_attempts
+            model_summary["task_success_rate"] = round(task_successes / task_attempts, 4)
         for dim in ("faithfulness", "relevance", "citation_correctness"):
             scores = [
                 e["scores"][dim]["score"]
@@ -382,16 +419,29 @@ def run_generation_eval(
                 model_summary[f"{dim}_min"] = min(scores)
                 model_summary[f"{dim}_max"] = max(scores)
 
-        if arm == "agent" and entries_list:
-            model_summary["avg_tool_calls"] = round(
-                sum(e.get("tool_calls", 0) for e in entries_list) / len(entries_list), 2
-            )
-            model_summary["avg_retrieval_calls"] = round(
-                sum(e.get("retrieval_calls", 0) for e in entries_list) / len(entries_list), 2
-            )
-            model_summary["avg_turns"] = round(
-                sum(e.get("turns", 0) for e in entries_list) / len(entries_list), 2
-            )
+        if arm == "agent":
+            if entries_list:
+                model_summary["avg_tool_calls"] = round(
+                    sum(e.get("tool_calls", 0) for e in entries_list) / len(entries_list), 2
+                )
+                model_summary["avg_retrieval_calls"] = round(
+                    sum(e.get("retrieval_calls", 0) for e in entries_list) / len(entries_list), 2
+                )
+                model_summary["avg_turns"] = round(
+                    sum(e.get("turns", 0) for e in entries_list) / len(entries_list), 2
+                )
+                model_summary["avg_tool_errors"] = round(
+                    sum(e.get("tool_errors", 0) for e in entries_list) / len(entries_list), 2
+                )
+            error_entries = [e for e in entries_list if e.get("tool_errors", 0) > 0]
+            tasks_with_errors = len(error_entries) + skipped_with_errors.get(label, 0)
+            tasks_recovered = sum(1 for e in error_entries if e.get("task_success"))
+            model_summary["tasks_with_errors"] = tasks_with_errors
+            model_summary["tasks_recovered"] = tasks_recovered
+            if tasks_with_errors:
+                model_summary["recovery_rate"] = round(
+                    tasks_recovered / tasks_with_errors, 4
+                )
 
         # Deterministic claim violations for this arm. Always recorded, so the
         # report and the gate can say "0 flagged" rather than "not checked".
@@ -482,6 +532,16 @@ def run_generation_eval(
             "latency_ms": m.get("latency_ms"),
             "chunks_retrieved": m.get("chunks_retrieved"),
             "claim_violations": m.get("claim_violations") or [],
+            "task_success": bool(m.get("task_success")),
+            **(
+                {
+                    "tool_calls": m.get("tool_calls", 0),
+                    "tool_errors": m.get("tool_errors", 0),
+                    "recovered": bool(m.get("tool_errors", 0) > 0 and m.get("task_success")),
+                }
+                if m["arm"] == "agent"
+                else {}
+            ),
         }
         for model_results in results.values()
         for m in model_results

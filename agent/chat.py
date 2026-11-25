@@ -67,6 +67,9 @@ class AgentAnswer:
     turns: int = 0
     tool_calls: int = 0
     retrieval_calls: int = 0
+    tool_errors: int = 0
+    recovered_errors: int = 0
+    unresolved_errors: int = 0
     stop_reason: str | None = None
     usage: dict[str, int] = field(default_factory=dict)
     prose: str = ""
@@ -148,6 +151,9 @@ async def answer_question(
         turns=state.turns,
         tool_calls=state.tool_calls,
         retrieval_calls=state.retrieval_calls,
+        tool_errors=state.tool_errors,
+        recovered_errors=state.recovered_errors,
+        unresolved_errors=state.unresolved_errors,
         stop_reason=state.stop_reason,
         usage=dict(state.usage),
     )

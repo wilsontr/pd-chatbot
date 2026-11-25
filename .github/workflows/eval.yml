@@ -82,6 +82,7 @@ jobs:
             --trials "$TRIALS" \
             --report docs/EVAL.md \
             --gate \
+            --gate-agent \
             --summary "$GITHUB_STEP_SUMMARY" \
             --quiet
 

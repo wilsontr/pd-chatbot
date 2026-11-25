@@ -52,6 +52,30 @@ DISCARDED_TEXT_NOTE = (
     "that still holds.]"
 )
 _NARRATION_CHARS = 200
+_PATCH_TARGET_TOOLS = frozenset({"write_patch", "run_patch", "analyze_audio"})
+
+
+def _is_tool_error(name: str, outcome: ToolOutcome) -> bool:
+    """True when a tool call failed or surfaced a recoverable problem.
+
+    Covers explicit tool failures (``ok=False``), empty ``search_docs``
+    retrievals (which ask the model to broaden its query), and ``run_patch``
+    runs where Pd reported errors or did not finish cleanly.
+    """
+    if not outcome.ok:
+        return True
+    if name == "search_docs" and not outcome.chunks:
+        return True
+    if name == "run_patch" and outcome.data.get("ran_cleanly") is False:
+        return True
+    return False
+
+
+def _tool_error_key(name: str, arguments: Mapping[str, Any]) -> tuple[str, str]:
+    """Identify the error episode so a later clean call can resolve it."""
+    if name in _PATCH_TARGET_TOOLS:
+        return (name, str(arguments.get("name") or ""))
+    return (name, "")
 
 
 @dataclass(frozen=True)
@@ -76,6 +100,9 @@ class LoopState:
     turns: int = 0
     tool_calls: int = 0
     retrieval_calls: int = 0
+    tool_errors: int = 0
+    recovered_errors: int = 0
+    unresolved_errors: int = 0
     stop_reason: str | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     #: Token usage summed over every model turn in the run.
@@ -118,6 +145,7 @@ class AgentLoop:
         forcing_final = False
         retracted = ""
         separate = False
+        open_errors: set[tuple[str, str]] = set()
 
         while True:
             if turn >= max(1, self.config.max_turns):
@@ -221,6 +249,14 @@ class AgentLoop:
             for call in final.tool_calls:
                 yield ToolCall(id=call.id, name=call.name, arguments=dict(call.input))
                 outcome = await self._run_tool(call.name, call.input)
+                error_key = _tool_error_key(call.name, call.input)
+                if _is_tool_error(call.name, outcome):
+                    self.state.tool_errors += 1
+                    open_errors.add(error_key)
+                elif error_key in open_errors:
+                    open_errors.remove(error_key)
+                    self.state.recovered_errors += 1
+                self.state.unresolved_errors = len(open_errors)
                 if call.name == "search_docs" and outcome.chunks:
                     self.state.retrieval_calls += 1
                 self.state.chunks.extend(outcome.chunks)

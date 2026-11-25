@@ -36,13 +36,18 @@ from .retrieval import run_retrieval_eval
 from .generation import EVAL_MODES, run_generation_eval
 from .scope_eval import run_scope_eval
 from .gates import (
+    AGENT_THRESHOLDS,
     GENERATION_THRESHOLDS,
     SCOPE_ADHERENCE_THRESHOLD,
+    check_agent_thresholds,
     check_claim_violations,
     check_scope_threshold,
     check_generation_thresholds,
+    format_agent_thresholds,
     generation_summary_markdown,
+    is_agent_arm,
     mean_score,
+    recovery_stats,
 )
 
 _STRATEGY_LABELS = {
@@ -163,8 +168,8 @@ def main(argv: list[str] | None = None) -> dict:
     )
     parser.add_argument(
         "--gate-agent", action="store_true",
-        help="Apply the generation thresholds to agent arms too (off by default: "
-             "the thresholds are calibrated on the pipeline)"
+        help="Enforce generation and agent-level thresholds (task success, tool calls, "
+             "cost, p95 latency, recovery rate) on agent arms too"
     )
     parser.add_argument(
         "--judge", type=str, default=JUDGE_MODEL,
@@ -330,6 +335,8 @@ def main(argv: list[str] | None = None) -> dict:
         failures = check_generation_thresholds(
             results["generation"], include_agent=args.gate_agent
         )
+        if args.gate_agent:
+            failures += check_agent_thresholds(results["generation"])
         failures += check_scope_threshold(results.get("scope"))
         claim_failures = check_claim_violations(results["generation"])
         if failures or claim_failures:
@@ -338,15 +345,17 @@ def main(argv: list[str] | None = None) -> dict:
                 print(f"  - {failure}", file=sys.stderr)
             for failure in claim_failures:
                 print(f"  - claim check: {failure}", file=sys.stderr)
-            print(
+            threshold_msg = (
                 "Thresholds: "
                 + ", ".join(
                     f"{dim} >= {minimum:g}"
                     for dim, minimum in GENERATION_THRESHOLDS.items()
                 )
-                + f", scope adherence >= {SCOPE_ADHERENCE_THRESHOLD:g}",
-                file=sys.stderr,
+                + f", scope adherence >= {SCOPE_ADHERENCE_THRESHOLD:g}"
             )
+            if args.gate_agent:
+                threshold_msg += f"; agent: {format_agent_thresholds(AGENT_THRESHOLDS)}"
+            print(threshold_msg, file=sys.stderr)
             exit_code = 1
         elif not args.quiet:
             print("\nGeneration gate passed.", file=sys.stderr)
@@ -398,6 +407,25 @@ def _tool_cell(model_summary: dict) -> str:
     if value is None:
         return "0"
     return str(int(value)) if float(value).is_integer() else f"{value:.2f}"
+
+
+def _task_success_cell(model_summary: dict) -> str:
+    value = _metric(model_summary, "task_success_rate")
+    if value is None:
+        return "-"
+    std = _spread(model_summary, "task_success_rate")
+    return f"{value:.0%} ± {std:.0%}" if std is not None else f"{value:.0%}"
+
+
+def _recovery_cell(model_name: str, model_summary: dict) -> str:
+    if not is_agent_arm(model_name, model_summary):
+        return "-"
+    rate, recovered, errors = recovery_stats(model_summary)
+    if errors > 0 and rate is not None:
+        return f"{rate:.0%} ({recovered}/{errors})"
+    if rate is not None:
+        return f"{rate:.0%}"
+    return "n/a (0 errors)"
 
 
 def _cost_total_lines(per_model: dict, trials: int) -> list[str]:
@@ -542,7 +570,10 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             )
             lines.append("")
         trials = generation.get("trials") or 1
-        has_agent = any(m.get("mode") == "agent" for m in per_model.values())
+        has_agent = any(is_agent_arm(name, m) for name, m in per_model.items())
+        has_task_metrics = has_agent or any(
+            _metric(m, "task_success_rate") is not None for m in per_model.values()
+        )
         header = ("| Model | Faithfulness | Relevance | Citation | n | Cost/query "
                   "| p50 latency | p95 latency |")
         divider = ("|-------|-------------|-----------|----------|---|------------|"
@@ -550,6 +581,12 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
         if has_agent:
             header += " Tool calls |"
             divider += "-----------|"
+        if has_task_metrics:
+            header += " Task success |"
+            divider += "--------------|"
+        if has_agent:
+            header += " Recovery |"
+            divider += "----------|"
         lines.append(header)
         lines.append(divider)
         for model_name, mdata in per_model.items():
@@ -563,6 +600,10 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             )
             if has_agent:
                 row += f" {_tool_cell(mdata)} |"
+            if has_task_metrics:
+                row += f" {_task_success_cell(mdata)} |"
+            if has_agent:
+                row += f" {_recovery_cell(model_name, mdata)} |"
             lines.append(row)
         lines.append("")
         lines.extend(_cost_total_lines(per_model, trials))
@@ -602,8 +643,7 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
             f"scope adherence >= {SCOPE_ADHERENCE_THRESHOLD:g}. "
             "Citation correctness is gated: the prompt requires URLs copied "
             "verbatim from the excerpts, so invented URLs fail the build. "
-            "The gate is enforced on the pipeline arm; agent-arm scores are "
-            "reported alongside it (`--gate-agent` gates them too). "
+            f"Agent gate (CI `--gate-agent`): {format_agent_thresholds(AGENT_THRESHOLDS)}. "
             "Deterministic claim checks fail the gate for every arm.*"
         )
 
@@ -628,12 +668,16 @@ def _agent_comparison(per_model: dict) -> list[str]:
         "### Pipeline vs agent",
         "",
         "Same entries, same judge, same 1-5 rubric. The agent arm decides its own "
-        "`search_docs` calls; the pipeline arm retrieves once and generates.",
+        "`search_docs` calls; the pipeline arm retrieves once and generates. "
+        "Task success counts entries scoring >= 4 on every judge dimension with "
+        "0 error claim violations; recovery is the share of error-encountering "
+        "agent tasks (tool failure, empty search, or non-clean Pd run) that "
+        "still recovered and passed.",
         "",
         "| Arm | Faithfulness | Relevance | Citation | n | Cost/query | p50 latency "
-        "| p95 latency | Tool calls |",
+        "| p95 latency | Tool calls | Task success | Recovery |",
         "|-----|--------------|-----------|----------|---|------------|-------------|"
-        "-------------|-----------|",
+        "-------------|-----------|--------------|----------|",
     ]
     for base_label, base, agent_label, agent in pairs:
         for label, mdata in ((f"{base_label} (pipeline)", base), (agent_label, agent)):
@@ -644,7 +688,9 @@ def _agent_comparison(per_model: dict) -> list[str]:
                 f"| {mdata.get('n', 0)} | {_cost_cell(mdata)} "
                 f"| {_seconds_cell(mdata, 'p50_latency_ms')} "
                 f"| {_seconds_cell(mdata, 'p95_latency_ms')} "
-                f"| {_tool_cell(mdata)} |"
+                f"| {_tool_cell(mdata)} "
+                f"| {_task_success_cell(mdata)} "
+                f"| {_recovery_cell(label, mdata)} |"
             )
     lines.append("")
     for base_label, base, agent_label, agent in pairs:

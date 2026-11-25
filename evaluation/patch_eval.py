@@ -218,17 +218,24 @@ async def run_task(task: dict[str, Any], arm: str, model: str) -> dict[str, Any]
         for p in answer.patches
     ]
     entries = answer.workspace.entries.values()
+    passed = any(s["passed"] for s in scores)
+    tool_errors = int(getattr(answer, "tool_errors", 0) or 0)
+    recovered_errors = int(getattr(answer, "recovered_errors", 0) or 0)
     return {
         "id": task["id"],
         "arm": arm,
         "wrote_patch": bool(scores),
         "clean": any(s["clean"] for s in scores),
-        "passed": any(s["passed"] for s in scores),
+        "passed": passed,
         "scores": scores,
         "revisions": sum(e.revisions for e in entries),
         "runs": answer.workspace.runs,
         "turns": answer.turns,
         "tool_calls": answer.tool_calls,
+        "tool_errors": tool_errors,
+        "recovered_errors": recovered_errors,
+        "had_error": tool_errors > 0,
+        "recovered": bool(tool_errors > 0 and passed),
         "stop_reason": answer.stop_reason,
         "latency_s": round(latency, 2),
         "cost_usd": pricing.cost_usd(model, answer.usage),
@@ -273,6 +280,8 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ]
         costs = [r["cost_usd"] for r in scored if r["cost_usd"] is not None]
         latencies = sorted(r["latency_s"] for r in scored)
+        tasks_with_errors = sum(1 for r in scored if r.get("had_error"))
+        tasks_recovered = sum(1 for r in scored if r.get("had_error") and r.get("recovered"))
         out[arm] = {
             "n": len(scored),
             "infrastructure_errors": len(mine) - len(scored),
@@ -280,6 +289,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "clean": statistics.mean(r["clean"] for r in scored),
             "passed": statistics.mean(r["passed"] for r in scored),
             "passed_by_trial": [round(v, 3) for v in per_trial],
+            "tasks_with_errors": tasks_with_errors,
+            "tasks_recovered": tasks_recovered,
+            "recovery_rate": (
+                round(tasks_recovered / tasks_with_errors, 4) if tasks_with_errors else None
+            ),
             "cost_usd": statistics.mean(costs) if costs else None,
             "latency_p50_s": statistics.median(latencies),
             "latency_p95_s": latencies[max(0, round(0.95 * len(latencies)) - 1)],
@@ -313,6 +327,13 @@ def to_markdown(summary: dict[str, Any], rows: list[dict[str, Any]]) -> str:
             "n/a" if summary[a][key] is None else fmt.format(summary[a][key]) for a in arms
         ]
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
+    recovery_cells = []
+    for a in arms:
+        rate = summary[a].get("recovery_rate")
+        errs = summary[a].get("tasks_with_errors", 0)
+        recs = summary[a].get("tasks_recovered", 0)
+        recovery_cells.append(f"{rate:.0%} ({recs}/{errs})" if rate is not None else "n/a (0 errors)")
+    lines.append("| Recovery rate | " + " | ".join(recovery_cells) + " |")
     lines += ["", "| Task | " + " | ".join(names[a] for a in arms) + " |", "|---|" + "---|" * len(arms)]
     for task in sorted({r["id"] for r in rows}):
         cells = []

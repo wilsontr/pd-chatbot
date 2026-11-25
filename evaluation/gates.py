@@ -64,6 +64,27 @@ CI_JUDGE_MODEL = JUDGE_MODEL
 # let a broken refusal ship.
 SCOPE_ADHERENCE_THRESHOLD = 0.9
 
+# Agent-level thresholds calibrated against the 30-entry x 3-trial baseline
+# (TASK-5.21, 2026-11-24: faithfulness 4.66 ± 0.05, relevance 4.87 ± 0.00,
+# citation 4.50 ± 0.12, cost/query $0.0125, p50 5.7s, p95 7.8s, tool calls 1.48)
+# and the 10-entry CI prefix (2026-11-25: task_success 70%, tool calls 1.40,
+# cost/query $0.0090, p95 6.0s; the 10-entry prefix includes known weak entries
+# q_006 and q_007, so a 60% floor leaves a 1-entry judge-noise margin).
+# Each bound catches real regressions (task-failure spikes, runaway tool loops,
+# cost/latency blowups, or broken error recovery) without flaking CI.
+AGENT_THRESHOLDS: dict[str, float] = {
+    "task_success_rate": 0.60,
+    "max_avg_tool_calls": 3.5,
+    "max_avg_cost_usd": 0.03,
+    "max_p95_latency_ms": 20000.0,
+    "recovery_rate": 0.50,
+}
+
+# Minimum error-encountering tasks required before recovery_rate fails the gate.
+# A 10-entry CI run often has 0-1 tool errors; gating on n=1 would be noisy,
+# while reporting still shows recovery_rate whenever tasks_with_errors >= 1.
+MIN_RECOVERY_ERROR_TASKS = 2
+
 
 def _mean_key(dimension: str) -> str:
     return f"{dimension}_mean"
@@ -86,11 +107,159 @@ def mean_score(model_summary: Mapping[str, Any], dimension: str) -> float | None
 def is_agent_arm(model_name: str, model_summary: Mapping[str, Any]) -> bool:
     """True for an agent-arm row in a pipeline-vs-agent comparison.
 
-    The thresholds were calibrated on the fixed pipeline; the agent arm is
-    reported next to it, not gated by it, until its own baseline is measured
-    (TASK-5.7).
+    ``check_generation_thresholds`` gates pipeline arms by default and includes
+    agent arms when ``include_agent=True`` (enabled in CI via ``--gate-agent``);
+    ``check_agent_thresholds`` enforces the agent-specific task metrics
+    calibrated in TASK-5.7.
     """
     return model_summary.get("mode") == "agent" or model_name.endswith(" (agent)")
+
+
+def _optional_number(model_summary: Mapping[str, Any], *keys: str) -> float | None:
+    """First numeric value under a single-trial key or its multi-trial ``_avg``."""
+    for key in keys:
+        for name in (key, f"{key}_avg"):
+            value = model_summary.get(name)
+            if isinstance(value, (int, float)):
+                return float(value)
+    return None
+
+
+def recovery_stats(model_summary: Mapping[str, Any]) -> tuple[float | None, int, int]:
+    """Return ``(recovery_rate, tasks_recovered, tasks_with_errors)``.
+
+    Pools counts across trials when ``tasks_with_errors_by_trial`` is present so
+    multi-trial recovery is exact rather than an unweighted average of trial rates.
+    """
+    errors_by_trial = model_summary.get("tasks_with_errors_by_trial")
+    if isinstance(errors_by_trial, list):
+        errors = int(sum(v for v in errors_by_trial if isinstance(v, (int, float))))
+        rec_by_trial = model_summary.get("tasks_recovered_by_trial")
+        recovered = (
+            int(sum(v for v in rec_by_trial if isinstance(v, (int, float))))
+            if isinstance(rec_by_trial, list)
+            else 0
+        )
+        return ((recovered / errors if errors else None), recovered, errors)
+
+    raw_errors = model_summary.get("tasks_with_errors")
+    if isinstance(raw_errors, (int, float)):
+        errors = int(raw_errors)
+        if errors <= 0:
+            return (None, 0, 0)
+        raw_recovered = model_summary.get("tasks_recovered")
+        if isinstance(raw_recovered, (int, float)):
+            recovered = int(raw_recovered)
+            return (recovered / errors, recovered, errors)
+        rate = _optional_number(model_summary, "recovery_rate")
+        if rate is not None:
+            return (rate, round(rate * errors), errors)
+        return (None, 0, errors)
+
+    rate = _optional_number(model_summary, "recovery_rate")
+    return (rate, 0, 0)
+
+
+def format_agent_thresholds(
+    thresholds: Mapping[str, float] | None = None,
+    *,
+    min_error_tasks: int = MIN_RECOVERY_ERROR_TASKS,
+) -> str:
+    """Human-readable summary of the agent-level gate thresholds."""
+    t = AGENT_THRESHOLDS if thresholds is None else thresholds
+    parts: list[str] = []
+    if "task_success_rate" in t:
+        parts.append(f"task_success >= {t['task_success_rate']:.0%}")
+    if "max_avg_tool_calls" in t:
+        parts.append(f"tool_calls <= {t['max_avg_tool_calls']:g}")
+    if "max_avg_cost_usd" in t:
+        parts.append(f"cost/task <= ${t['max_avg_cost_usd']:.4f}")
+    if "max_p95_latency_ms" in t:
+        parts.append(f"p95 <= {t['max_p95_latency_ms'] / 1000:.1f}s")
+    if "recovery_rate" in t:
+        parts.append(
+            f"recovery >= {t['recovery_rate']:.0%} (when >= {min_error_tasks} error tasks)"
+        )
+    return ", ".join(parts)
+
+
+def check_agent_thresholds(
+    generation: Mapping[str, Any] | None,
+    thresholds: Mapping[str, float] | None = None,
+    *,
+    min_error_tasks: int = MIN_RECOVERY_ERROR_TASKS,
+) -> list[str]:
+    """Return one message per agent metric that breaches its calibrated bound.
+
+    Checks task success rate, tool calls per task, cost per task, p95 latency,
+    and recovery rate (when enough tasks encountered tool errors).
+    """
+    t = AGENT_THRESHOLDS if thresholds is None else thresholds
+    per_model = (generation or {}).get("per_model", {}) or {}
+    agent_rows = [
+        (name, summary)
+        for name, summary in per_model.items()
+        if is_agent_arm(name, summary)
+    ]
+    if not agent_rows:
+        return [
+            "no agent-arm scores were produced — re-run with --mode agent or --mode both"
+        ]
+
+    failures: list[str] = []
+    for model_name, model_summary in agent_rows:
+        attempts = _optional_number(model_summary, "task_attempts")
+        if not model_summary.get("n") and not attempts:
+            failures.append(f"{model_name}: no entries were scored")
+            continue
+
+        if "task_success_rate" in t:
+            rate = _optional_number(model_summary, "task_success_rate")
+            minimum = t["task_success_rate"]
+            if rate is None:
+                failures.append(f"{model_name}: task_success_rate missing")
+            elif rate < minimum:
+                failures.append(
+                    f"{model_name}: task_success_rate {rate:.2f} < {minimum:.2f} threshold"
+                )
+
+        if "max_avg_tool_calls" in t:
+            calls = _optional_number(model_summary, "avg_tool_calls")
+            maximum = t["max_avg_tool_calls"]
+            if calls is not None and calls > maximum:
+                failures.append(
+                    f"{model_name}: avg_tool_calls {calls:.2f} > {maximum:.2f} threshold"
+                )
+
+        if "max_avg_cost_usd" in t:
+            cost = _optional_number(model_summary, "avg_total_cost_usd", "avg_cost_usd")
+            maximum = t["max_avg_cost_usd"]
+            if cost is not None and cost > maximum:
+                failures.append(
+                    f"{model_name}: avg_cost_usd ${cost:.4f} > ${maximum:.4f} threshold"
+                )
+
+        if "max_p95_latency_ms" in t:
+            p95 = _optional_number(model_summary, "p95_latency_ms")
+            maximum = t["max_p95_latency_ms"]
+            if p95 is not None and p95 > maximum:
+                failures.append(
+                    f"{model_name}: p95_latency {p95 / 1000:.1f}s > {maximum / 1000:.1f}s threshold"
+                )
+
+        if "recovery_rate" in t:
+            rate, recovered, errors = recovery_stats(model_summary)
+            minimum = t["recovery_rate"]
+            if errors >= min_error_tasks:
+                if rate is None:
+                    failures.append(f"{model_name}: recovery_rate missing")
+                elif rate < minimum:
+                    failures.append(
+                        f"{model_name}: recovery_rate {rate:.2f} ({recovered}/{errors}) "
+                        f"< {minimum:.2f} threshold"
+                    )
+
+    return failures
 
 
 def check_generation_thresholds(
@@ -228,6 +397,21 @@ def _format_score(value: Any) -> str:
     return f"{value:.2f}" if isinstance(value, (int, float)) else "-"
 
 
+def _format_rate(value: float | None) -> str:
+    return f"{value:.0%}" if value is not None else "-"
+
+
+def _format_recovery(model_name: str, model_summary: Mapping[str, Any]) -> str:
+    if not is_agent_arm(model_name, model_summary):
+        return "-"
+    rate, recovered, errors = recovery_stats(model_summary)
+    if errors > 0 and rate is not None:
+        return f"{rate:.0%} ({recovered}/{errors})"
+    if rate is not None:
+        return f"{rate:.0%}"
+    return "n/a (0 errors)"
+
+
 def generation_summary_markdown(
     results: Mapping[str, Any],
     *,
@@ -251,6 +435,8 @@ def generation_summary_markdown(
     failures = check_generation_thresholds(
         generation, thresholds, include_agent=include_agent
     )
+    if include_agent:
+        failures += check_agent_thresholds(generation)
     claim_failures = check_claim_violations(generation)
 
     lines: list[str] = [
@@ -262,18 +448,30 @@ def generation_summary_markdown(
         f"- **Trials:** {trials}" + (" (cells are means across trials)" if trials > 1 else ""),
         f"- **Gate:** "
         + ", ".join(f"{dim} >= {minimum:g}" for dim, minimum in thresholds.items()),
-        "",
     ]
+    if include_agent:
+        lines.append(f"- **Agent gate:** {format_agent_thresholds()}")
+    lines.append("")
 
     if per_model:
-        lines += [
+        has_agent_metrics = any(
+            is_agent_arm(name, m) or _optional_number(m, "task_success_rate") is not None
+            for name, m in per_model.items()
+        )
+        header = (
             "| Model | Faithfulness | Relevance | Citation | n | Cost/query "
-            "| p50 | p95 |",
+            "| p50 | p95 |"
+        )
+        divider = (
             "|-------|--------------|-----------|----------|---|------------|"
-            "-----|-----|",
-        ]
+            "-----|-----|"
+        )
+        if has_agent_metrics:
+            header += " Task success | Tool calls | Recovery |"
+            divider += "--------------|------------|----------|"
+        lines += [header, divider]
         for model_name, m in per_model.items():
-            lines.append(
+            row = (
                 f"| {model_name} "
                 f"| {_format_score(mean_score(m, 'faithfulness'))} "
                 f"| {_format_score(mean_score(m, 'relevance'))} "
@@ -283,6 +481,19 @@ def generation_summary_markdown(
                 f"| {_latency_cell(m, 'p50_latency_ms')} "
                 f"| {_latency_cell(m, 'p95_latency_ms')} |"
             )
+            if has_agent_metrics:
+                calls = _optional_number(m, "avg_tool_calls")
+                calls_cell = (
+                    "0"
+                    if calls is None
+                    else (str(int(calls)) if float(calls).is_integer() else f"{calls:.2f}")
+                )
+                row += (
+                    f" {_format_rate(_optional_number(m, 'task_success_rate'))} "
+                    f"| {calls_cell} "
+                    f"| {_format_recovery(model_name, m)} |"
+                )
+            lines.append(row)
         lines.append("")
 
         run_cost = sum(
@@ -318,7 +529,7 @@ def generation_summary_markdown(
         if per_model:
             lines.append("")
             for model_name, m in per_model.items():
-                if is_agent_arm(model_name, m):
+                if not include_agent and is_agent_arm(model_name, m):
                     continue
                 for dimension, minimum in thresholds.items():
                     lines.append(
@@ -326,6 +537,13 @@ def generation_summary_markdown(
                         f"{_format_score(mean_score(m, dimension))} "
                         f">= {minimum:g}"
                     )
+                if include_agent and is_agent_arm(model_name, m):
+                    rate = _optional_number(m, "task_success_rate")
+                    if rate is not None:
+                        lines.append(
+                            f"- {model_name}: task_success_rate {rate:.0%} "
+                            f">= {AGENT_THRESHOLDS['task_success_rate']:.0%}"
+                        )
             lines.append("- deterministic claim checks: 0 flagged (all arms)")
     lines.append("")
     return "\n".join(lines)
