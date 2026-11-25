@@ -3,6 +3,8 @@ name: Evaluation
 on:
   push:
     branches: [main]
+    # Nothing here changes what the evaluation measures, and each run costs money.
+    paths-ignore: ['backlog/**', '**.md']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -17,8 +19,8 @@ on:
         default: '1'
 
 # Prevent concurrent eval runs on the same branch from racing each
-# other when auto-committing EVAL.md.  Without this, two pushes in
-# quick succession can produce a "cannot lock ref" error on push.
+# other when publishing EVAL.md. Pushes made by anyone else during a
+# run are handled by .github/scripts/publish_eval.sh.
 concurrency:
   group: eval-${{ github.ref }}
   cancel-in-progress: false
@@ -83,15 +85,6 @@ jobs:
             --summary "$GITHUB_STEP_SUMMARY" \
             --quiet
 
-      - name: Commit updated EVAL.md
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: stefanzweifel/git-auto-commit-action@v7
-        with:
-          commit_message: 'ci: update evaluation results [skip ci]'
-          file_pattern: docs/EVAL.md
-          commit_user_name: github-actions[bot]
-          commit_user_email: github-actions[bot]@users.noreply.github.com
-
       - name: Install Pd (headless patch tests)
         run: |
           sudo apt-get update
@@ -103,3 +96,8 @@ jobs:
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
         run: |
           pytest tests/ -v
+
+      # Last, so a problem publishing cannot hide a test result.
+      - name: Publish EVAL.md
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: .github/scripts/publish_eval.sh

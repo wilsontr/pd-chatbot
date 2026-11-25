@@ -449,8 +449,10 @@ PR:
 2. Runs the retrieval evaluation (recall@k, MRR, nDCG) — plus, on `main`, the
    agent's tool-call retrieval and a sampled pipeline-vs-agent generation eval —
    writing `docs/EVAL.md`
-3. Auto-commits `docs/EVAL.md` to `main` (skips on PRs)
-4. Runs `pytest tests/` with threshold assertions
+3. Runs `pytest tests/` with threshold assertions
+4. Publishes `docs/EVAL.md` to `main` (skips on PRs, and if the code on `main` changed during the run)
+
+Pushes to `main` that change only `backlog/` or Markdown files skip it.
 
 A second workflow
 ([`generation-eval.yml`](.github/workflows/generation-eval.yml)) adds the
