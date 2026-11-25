@@ -1,11 +1,11 @@
 ---
 id: TASK-5.5
 title: Give the agent patch execution and audio analysis tools
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-23 20:40'
-updated_date: '2026-11-25 00:46'
+updated_date: '2026-11-25 01:05'
 labels:
   - agent
 dependencies:
@@ -52,4 +52,12 @@ AC evidence. #1: write_patch is the agent's only patch path; agent/chat.py and t
 Found by measuring: the first version dropped answer text written beside write_patch (relevance 5.00 -> 4.58); fixed in the loop (4.93).
 Validation: 648 passed, 17 skipped (Pd not installed); sandbox and patch-tool tests also pass on Modal (124 passed, 1 skipped); web UI checked in a browser.
 Left open: one live run from Railway after deploy, so the task stays In Progress. Audio playback and step display in the UI are TASK-5.6; tool-output injection checks and per-run budgets are TASK-5.8. Patch tests that need the sandbox image are not in a CI workflow yet. Text can appear and be retracted (text_reset) while the agent iterates; hard tasks take 20-40 s.
+
+Live check 2026-11-24: deployed 646b29f to Railway and Vercel. Through the public site, run_patch returned status ok and ran_cleanly true from Modal, and analyze_audio measured 440.0 Hz, peak 0.5.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The agent writes patches with write_patch, runs them in the Pd sandbox and measures the audio, revising before it answers. Added a spec-checked patch eval: 73% of answers run cleanly and meet spec without execution, 92% with (docs/PATCH_EVAL.md). Audio is an artifact event served from /artifacts/{id}; the UI draws patch artifacts. Verified by 648 tests, the Modal backend, documentation-eval comparison, and a live run in production.
+<!-- SECTION:FINAL_SUMMARY:END -->
