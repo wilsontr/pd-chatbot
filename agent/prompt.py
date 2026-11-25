@@ -191,6 +191,19 @@ _TOOL_RULES = (
     "answer: text written before a search is discarded.\n"
 )
 
+_SKILL_RULES = (
+    "\n\nSkills\n"
+    "- A skill is a detailed playbook for one kind of request. The `load_skill` tool "
+    "lists the installed skills by name and a one-line description.\n"
+    "- When a request is covered by one of those descriptions, call `load_skill` with "
+    "that name and follow the instructions it returns. Load it before doing the work, "
+    "not after.\n"
+    "- A skill tells you how to do the work; it is not documentation. Cite only the "
+    "excerpts `search_docs` returned, never a skill file.\n"
+    "- Do not load a skill whose description does not match the request, and do not "
+    "mention the skill system to the user.\n"
+)
+
 _NO_EXECUTION_RULES = (
     "\n\nPatches cannot be run here\n"
     "- You cannot run a patch. Never say or imply that one has been tested, and do not bring up "
@@ -221,10 +234,16 @@ _EXECUTION_RULES = (
 
 
 
-def agent_system_prompt(*, execution: bool) -> str:
+def agent_system_prompt(*, execution: bool, skills: bool = False) -> str:
+    """The agent's prompt.
+
+    The skill rules are only added when skills are installed: an empty registry
+    should not tell the model about a capability it cannot use.
+    """
     return (
         _ANSWER_RULES + _PATCH_TOOL_RULES + _SESSION_PATCH_RULES + _PROSE_CHAIN_RULE
         + _TOOL_RULES
+        + (_SKILL_RULES if skills else "")
         + (_EXECUTION_RULES if execution else _NO_EXECUTION_RULES)
     )
 

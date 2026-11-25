@@ -149,6 +149,21 @@ idempotent tool calls.
 - **MCP:** expose the same tools as an MCP server, so Claude Code or Claude
   Desktop can use the Pd sandbox and docs search.
 
+*Done in TASK-5.13: the runtime skills registry.* `agent/skills/` discovers
+`SKILL.md` folders under `$SKILLS_DIR` (default `skills/`) and parses the flat
+front matter (`name`, `description`, optional `version`); a malformed folder is
+skipped with a diagnostic rather than breaking the others. `agent/tools/skills.py`
+exposes `load_skill(name)`: its description carries only the catalogue (names and
+one-line descriptions), and the instructions plus a list of the skill's bundled
+files arrive as the tool result. Versions are the declared `version`, or a digest
+of the skill's files, so an edit changes the version without anyone bumping a
+number. Hot reload is per turn: `ToolRegistry.refresh()` runs at the top of every
+loop turn and `load_skill` re-reads the folder on every call, so a new or edited
+skill is live on the next turn (and the durable path rebuilds its tools each
+turn). Each run records what it loaded: `LoopState.loaded_skills` →
+`Done.skills`, the run log, `RunStore.reconstruct_state()` and the Langfuse
+trace metadata. The eval gate that consumes those records is still TASK-5.15.
+
 **Concepts to learn:** progressive disclosure of context, MCP, versioned
 capability registries.
 
@@ -161,7 +176,7 @@ core package, for example `agent/` with `loop.py`, `tools/`, `skills/` and
 `store.py`. The loop emits a typed event stream (`text_delta`, `tool_call`,
 `tool_result`, `artifact`). Each interface becomes a thin adapter over that
 stream. *Done in TASK-5.1 for `loop.py`, `tools/` and the typed stream; `skills/`
-and `store.py` arrive with TASK-5.13 and TASK-5.9.*
+arrived with TASK-5.13 and `store.py` with TASK-5.9.*
 
 The adapters that follow from that boundary:
 

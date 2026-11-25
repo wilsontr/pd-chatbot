@@ -64,8 +64,9 @@ DOCS_TOOLS: frozenset[str] = frozenset({"search_docs"})
 PATCH_SESSION_TOOLS: frozenset[str] = frozenset({"list_patches", "read_patch"})
 PATCH_WRITE_TOOLS: frozenset[str] = frozenset({"write_patch"})
 SANDBOX_TOOLS: frozenset[str] = frozenset({"run_patch", "analyze_audio"})
+SKILL_TOOLS: frozenset[str] = frozenset({"load_skill"})
 ALL_CORE_TOOLS: frozenset[str] = (
-    DOCS_TOOLS | PATCH_SESSION_TOOLS | PATCH_WRITE_TOOLS | SANDBOX_TOOLS
+    DOCS_TOOLS | PATCH_SESSION_TOOLS | PATCH_WRITE_TOOLS | SANDBOX_TOOLS | SKILL_TOOLS
 )
 
 

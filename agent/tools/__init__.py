@@ -6,15 +6,19 @@ synchronous on purpose: retrieval does blocking I/O, and the loop runs each tool
 in a worker thread so the event loop keeps streaming.
 
 Later subtasks (patch execution, skills, MCP) add tools here without touching the
-loop.
+loop. A tool that resolves something at run time (the skills directory) can expose
+a ``refresh()``; the loop calls it once per turn.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Protocol, runtime_checkable
 
 from ..types import Chunk
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,14 @@ class Tool(Protocol):
         ...
 
 
+@runtime_checkable
+class RefreshableTool(Protocol):
+    """A tool whose advertised spec depends on state that can change between turns."""
+
+    def refresh(self) -> None:
+        ...
+
+
 class ToolRegistry:
     """The tools one run may use, in the order the model sees them."""
 
@@ -79,6 +91,30 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return list(self._tools)
+
+    def refresh(self) -> None:
+        """Let refreshable tools re-read what they resolve at run time.
+
+        The loop calls this at the start of every turn, so a skill added to the
+        watched directory is advertised from the next turn on. A failing tool must
+        not fail the run: the previous view stays in place and the error is logged.
+        """
+        for tool in self._tools.values():
+            if not isinstance(tool, RefreshableTool):
+                continue
+            try:
+                tool.refresh()
+            except Exception:
+                logger.warning(
+                    "failed to refresh tool %s", self._tool_name(tool), exc_info=True
+                )
+
+    @staticmethod
+    def _tool_name(tool: Tool) -> str:
+        try:
+            return tool.spec.name
+        except Exception:
+            return type(tool).__name__
 
     def filtered(self, allowed: Iterable[str]) -> "ToolRegistry":
         """Return a new registry restricted to tool names in ``allowed``."""

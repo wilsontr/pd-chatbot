@@ -642,6 +642,7 @@ def _step_finish_run(
     stop_reason: str | None,
     budget_exceeded: str | None,
     refused: bool,
+    loaded_skills: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Repair patches, emit artifacts + Done, and finalize the RunStore row."""
     workspace = PatchWorkspace.from_snapshot(workspace_snapshot)
@@ -672,6 +673,10 @@ def _step_finish_run(
         else list(history)
     )[-HISTORY_MAX_OUTGOING:]
 
+    skills = tuple(
+        {"name": name, "version": version}
+        for name, version in (loaded_skills or {}).items()
+    )
     done_event = Done(
         answer=answer,
         new_history=new_history,
@@ -682,6 +687,7 @@ def _step_finish_run(
         refused=refused,
         budget_exceeded=budget_exceeded,
         patches=patches,
+        skills=skills,
         run_id=run_id,
         session_id=session_id,
     )
@@ -720,6 +726,7 @@ def _step_finish_run(
         "refused": refused,
         "patches": list(patches),
         "audio": list(audio),
+        "skills": list(skills),
         "history": new_history,
     }
 
@@ -799,6 +806,7 @@ async def durable_agent_workflow(
 
     workspace_snapshot: dict[str, Any] = _step_load_session_patches(session_id)
     chunks: list[Chunk] = []
+    loaded_skills: dict[str, str] = {}
     usage_totals: dict[str, int] = {}
     total_tokens = 0
     cost_total = 0.0
@@ -986,6 +994,11 @@ async def durable_agent_workflow(
             seq += 2
             workspace_snapshot = tool_res["workspace_snapshot"]
             chunks.extend(tool_res["chunks"])
+            loaded_skill = (tool_res.get("data") or {}).get("loaded_skill")
+            if tool_res["ok"] and isinstance(loaded_skill, dict) and loaded_skill.get("name"):
+                loaded_skills[str(loaded_skill["name"])] = str(
+                    loaded_skill.get("version") or ""
+                )
             tool_calls_count += 1
             result_blocks.append({
                 "type": "tool_result",
@@ -1025,6 +1038,7 @@ async def durable_agent_workflow(
         stop_reason=stop_reason,
         budget_exceeded=budget_exceeded,
         refused=False,
+        loaded_skills=loaded_skills,
     )
 
 

@@ -248,6 +248,9 @@ class Done:
     patch_failed: bool = False
     budget_exceeded: str | None = None
     patches: tuple[dict[str, Any], ...] = ()
+    #: ``{"name", "version"}`` for every skill this run loaded, so the run log
+    #: records which version of each skill shaped the answer.
+    skills: tuple[dict[str, str], ...] = ()
     run_id: str | None = None
     session_id: str | None = None
     langfuse_trace_id: str | None = None
@@ -265,6 +268,7 @@ class Done:
             "cached": self.cached,
             "patch_failed": self.patch_failed,
             **({"budget_exceeded": self.budget_exceeded} if self.budget_exceeded else {}),
+            **({"skills": list(self.skills)} if self.skills else {}),
             **({"run_id": self.run_id} if self.run_id else {}),
             **({"session_id": self.session_id} if self.session_id else {}),
             **({"langfuse_trace_id": self.langfuse_trace_id} if self.langfuse_trace_id else {}),
@@ -277,6 +281,7 @@ class Done:
             "answer": self.answer,
             "query_type": self.query_type,
             "patches": list(self.patches),
+            "skills": list(self.skills),
             "chunk_count": len(self.chunks),
         }
 

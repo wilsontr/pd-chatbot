@@ -49,6 +49,7 @@ agent/chat.py    request orchestration: cache, scope gate, guardrails, artifacts
 agent/loop.py    the tool-use loop: streams text, runs tools, bounded turns
       ↓
 agent/tools/docs.py  search_docs  →  agent/retrieval.py (hybrid RRF + parent lookup)
+agent/tools/skills.py  load_skill  →  agent/skills/ (SKILL.md folders, re-read per turn)
 ```
 
 The loop emits a typed event stream (`text_delta`, `tool_call`, `tool_result`,
@@ -61,6 +62,32 @@ scripted model client, so they need no API key.
 generate → validate). It is kept as the **baseline arm** of the evaluation so the
 agent's numbers can be compared with the pipeline on the same golden set; it is no
 longer on the serving path.
+
+### Skills
+
+Skills are versioned playbooks ([Agent Skills](https://code.claude.com/docs/en/skills)
+format) the agent can load when a question calls for one, in
+[`skills/`](skills/README.md):
+
+```
+skills/granular-synthesis/
+    SKILL.md          # front matter (name, description, optional version) + instructions
+    scripts/...       # optional files the instructions refer to
+```
+
+The model sees only each skill's name and one-line description, in the
+`load_skill` tool's description; the instructions arrive as the tool result only
+when it calls `load_skill(name)`. That keeps the answer prompt small while the
+project carries as many long skills as it likes. Every skill has a version — the
+declared one, or a digest of its files — and each run records the versions it
+loaded in its `done` event and run log, which is what the per-skill eval gate
+(TASK-5.15) will key on.
+
+The registry reads the directory rather than caching it: `ToolRegistry.refresh()`
+runs at the start of **every turn** and `load_skill` re-reads the skill folder on
+every call, so adding or editing a `SKILL.md` (in `$SKILLS_DIR`, default `skills/`)
+takes effect on the next turn with no restart. See
+[`skills/README.md`](skills/README.md) for the format and the trust rules.
 
 ### Retrieval
 

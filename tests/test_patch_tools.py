@@ -302,12 +302,12 @@ class TestRegistry:
     def test_execution_follows_configuration(self, monkeypatch):
         monkeypatch.delenv("PD_SANDBOX_BACKEND", raising=False)
         assert chat.default_registry().names() == [
-            "search_docs", "list_patches", "read_patch", "write_patch"]
+            "search_docs", "list_patches", "read_patch", "write_patch", "load_skill"]
         assert "run_patch" not in chat.default_config().system_prompt
         monkeypatch.setenv("PD_SANDBOX_BACKEND", "modal")
         assert chat.default_registry().names() == [
             "search_docs", "list_patches", "read_patch", "write_patch",
-            "run_patch", "analyze_audio"]
+            "run_patch", "analyze_audio", "load_skill"]
         assert "run_patch" in chat.default_config().system_prompt
 
 

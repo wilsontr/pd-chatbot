@@ -16,6 +16,12 @@ the model is told to write its answer again. Text beside an output-only call
 Bounded by ``max_turns``. If the budget runs out while the model still wants to
 call tools, the loop asks once more with tools disabled and returns that answer
 rather than leaving the user with nothing.
+
+The tool registry is refreshed at the start of every turn, so state a tool
+resolves at run time — the installed skills — is advertised as it is *now*, and a
+skill added mid-run is usable from the next turn without rebuilding anything.
+Skills the model actually loaded are kept in ``LoopState.loaded_skills`` with the
+version it read, which is what the run log records.
 """
 
 from __future__ import annotations
@@ -147,6 +153,8 @@ class LoopState:
     messages: list[dict[str, Any]] = field(default_factory=list)
     #: Token usage summed over every model turn in the run.
     usage: dict[str, int] = field(default_factory=dict)
+    #: Skill name -> version, for every skill the model loaded in this run.
+    loaded_skills: dict[str, str] = field(default_factory=dict)
 
 
 class AgentLoop:
@@ -189,6 +197,8 @@ class AgentLoop:
         open_errors: set[tuple[str, str]] = set()
 
         while True:
+            # Skills (and any future run-time tool state) are re-read per turn.
+            self.tools.refresh()
             if turn >= max(1, self.config.max_turns):
                 if not self.config.force_final_answer or forcing_final:
                     if not forcing_final:
@@ -370,6 +380,8 @@ class AgentLoop:
                 self.state.unresolved_errors = len(open_errors)
                 if call.name == "search_docs" and outcome.chunks:
                     self.state.retrieval_calls += 1
+                if call.name == "load_skill":
+                    self._record_loaded_skill(outcome)
                 self.state.chunks.extend(outcome.chunks)
                 self.state.tool_calls += 1
                 yield ToolResult(
@@ -404,6 +416,17 @@ class AgentLoop:
         if not sources_sent:
             async for event in self._citations_then_buffered(pending, answer_parts):
                 yield event
+
+    def _record_loaded_skill(self, outcome: ToolOutcome) -> None:
+        """Remember the skill version the model loaded, for the run record."""
+        loaded = outcome.data.get("loaded_skill") if outcome.ok else None
+        if not isinstance(loaded, Mapping):
+            return
+        name = str(loaded.get("name") or "").strip()
+        if not name:
+            return
+        self.state.loaded_skills[name] = str(loaded.get("version") or "")
+        newrelic.agent.record_custom_metric("Custom/Agent/SkillLoaded", 1)
 
     def _visible_tool_specs(self) -> list[dict[str, Any]]:
         """Schemas advertised to the model, filtered by the interface's tool policy."""

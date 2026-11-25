@@ -237,6 +237,7 @@ def event_from_record(event_type: str, payload: dict[str, Any]) -> AgentEvent:
             patch_failed=bool(payload.get("patch_failed", False)),
             budget_exceeded=payload.get("budget_exceeded"),
             patches=tuple(payload.get("patches") or ()),
+            skills=tuple(payload.get("skills") or ()),
             run_id=payload.get("run_id"),
             session_id=payload.get("session_id"),
             langfuse_trace_id=payload.get("langfuse_trace_id"),
@@ -493,6 +494,7 @@ class RunStore:
         chunks: list[dict[str, Any]] = []
         patches: list[dict[str, Any]] = []
         audio: list[dict[str, Any]] = []
+        skills: dict[str, str] = {}
         usage: dict[str, int] = {}
         cost_usd = 0.0
         has_cost = False
@@ -522,6 +524,11 @@ class RunStore:
             elif isinstance(ev, ToolResult):
                 tool_calls += 1
                 chunks.extend(ev.chunks)
+                loaded_skill = (ev.data or {}).get("loaded_skill")
+                if isinstance(loaded_skill, dict) and loaded_skill.get("name"):
+                    skills[str(loaded_skill["name"])] = str(
+                        loaded_skill.get("version") or ""
+                    )
                 pending_tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": ev.id,
@@ -545,6 +552,9 @@ class RunStore:
                 done_event = ev
                 if ev.query_type:
                     query_type = ev.query_type
+                for record in ev.skills:
+                    if record.get("name"):
+                        skills[str(record["name"])] = str(record.get("version") or "")
 
         _flush_tool_results()
         replayed_answer = done_event.answer if done_event is not None else "".join(answer_parts)
@@ -561,6 +571,10 @@ class RunStore:
             "chunks": chunks,
             "patches": patches,
             "audio": audio,
+            "skills": [
+                {"name": name, "version": version}
+                for name, version in sorted(skills.items())
+            ],
             "turns": turns,
             "tool_calls": tool_calls,
             "usage": usage,

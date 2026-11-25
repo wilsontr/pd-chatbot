@@ -36,16 +36,18 @@ from .guardrails import (
 )
 from .history import HISTORY_MAX_OUTGOING, compress_history_async
 from .llm import AnthropicModelClient, ModelClient
-from .loop import AgentConfig, AgentLoop
+from .loop import AgentConfig, AgentLoop, LoopState
 from .patch_counts import repair_patch
 from .patches import append_patches, strip_patch_blocks
 from .prompt import agent_system_prompt
 from .retrieval import chunks_to_sources
 from .sessions import SessionPatchStore
+from .skills import SkillRegistry, default_skill_registry
 from .store import RunRecorder, RunStore
 from .tools import ToolRegistry
 from .tools.docs import default_tools
 from .tools.patch import execution_enabled, patch_tools
+from .tools.skills import skill_tools
 from .types import Chunk, HistoryItem
 from .workspace import PatchWorkspace
 
@@ -85,6 +87,8 @@ class AgentAnswer:
     patches: list[dict] = field(default_factory=list)
     evidence: list[Chunk] = field(default_factory=list)
     workspace: PatchWorkspace | None = None
+    #: Skill name -> version, for every skill the run loaded.
+    loaded_skills: dict[str, str] = field(default_factory=dict)
 
 
 def default_registry(
@@ -94,12 +98,19 @@ def default_registry(
     interface: str = "web",
     policy: ToolPolicy | None = None,
     approved_tools: Collection[str] = (),
+    skills: SkillRegistry | None = None,
 ) -> ToolRegistry:
-    """Documentation search plus the patch tools permitted for ``interface``.
+    """Documentation search, the patch tools permitted for ``interface``, and skills.
 
     ``execution`` adds the tools that run patches; by default it follows whether
     a sandbox backend is configured, and is further constrained by the
     interface's ``ToolPolicy``.
+
+    ``load_skill`` is always registered, even when the watched directory is
+    empty: the loop refreshes the registry each turn, so a skill added while a
+    session is running is usable from the next turn instead of the next deploy.
+    With nothing installed its description says so, and the model is told not to
+    call it.
     """
     if execution is None:
         execution = execution_enabled()
@@ -107,6 +118,7 @@ def default_registry(
     registry = ToolRegistry([
         *default_tools(),
         *patch_tools(workspace or PatchWorkspace(), execution=execution),
+        *skill_tools(skills),
     ])
     return registry.filtered(effective_policy.allowed)
 
@@ -117,6 +129,7 @@ def default_config(
     interface: str = "web",
     policy: ToolPolicy | None = None,
     approved_tools: Collection[str] = (),
+    skills: bool | None = None,
     **overrides,
 ) -> AgentConfig:
     if execution is None:
@@ -126,14 +139,23 @@ def default_config(
     can_execute = execution and bool(
         effective_policy.permitted_names(approved=approved) & {"run_patch", "analyze_audio"}
     )
+    has_skills = skills if skills is not None else default_skill_registry().has_skills()
     return AgentConfig(**{
-        "system_prompt": agent_system_prompt(execution=can_execute),
+        "system_prompt": agent_system_prompt(execution=can_execute, skills=has_skills),
         # Writing, running, analysing and revising a patch takes more turns.
         "max_turns": 9 if can_execute else 6,
         "tool_policy": effective_policy,
         "approved_tools": approved,
         **overrides,
     })
+
+
+def _skill_records(state: LoopState) -> tuple[dict[str, str], ...]:
+    """The ``Done`` payload's record of the skill versions this run loaded."""
+    return tuple(
+        {"name": name, "version": version}
+        for name, version in state.loaded_skills.items()
+    )
 
 
 def _finish_patches(workspace: PatchWorkspace, chunks: list[Chunk]) -> None:
@@ -237,6 +259,7 @@ async def answer_question(
         budget_exceeded=state.budget_exceeded,
         stop_reason=state.stop_reason,
         usage=dict(state.usage),
+        loaded_skills=dict(state.loaded_skills),
     )
 
 
@@ -507,6 +530,7 @@ async def stream_chat(
                 query_type=query_type,
                 turns=loop.state.turns,
                 tool_calls=loop.state.tool_calls,
+                skills=_skill_records(loop.state),
                 run_id=run_id,
                 session_id=session_id,
                 langfuse_trace_id=lf_trace_id,
@@ -615,6 +639,7 @@ async def stream_chat(
             "pd_patch_failed": patch_failed,
             "patches": len(patches),
             "patch_runs": workspace.runs,
+            "skills": [f"{name}@{version}" for name, version in state.loaded_skills.items()],
         })
         root.update(output=answer[:500], metadata=root_meta)
         ev_done = Done(
@@ -627,6 +652,7 @@ async def stream_chat(
             patch_failed=patch_failed,
             budget_exceeded=state.budget_exceeded,
             patches=patches,
+            skills=_skill_records(state),
             run_id=run_id,
             session_id=session_id,
             langfuse_trace_id=lf_trace_id,
