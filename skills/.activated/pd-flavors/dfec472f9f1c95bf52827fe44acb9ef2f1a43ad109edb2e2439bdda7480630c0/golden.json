@@ -1,0 +1,32 @@
+{
+  "skill": "pd-flavors",
+  "questions": [
+    {
+      "id": "flavor-001",
+      "question": "Does [clone] work in Purr Data?",
+      "notes": "Separates what the documentation establishes (clone is described in the Vanilla manual and the IEM object reference) from what it does not (Purr Data's bundling and compatibility), and says the fork's own docs are the place to confirm. Should not assert that it does or does not work there."
+    },
+    {
+      "id": "flavor-002",
+      "question": "What is the difference between Pd Vanilla and Pd-extended?",
+      "expects": ["2014"],
+      "notes": "Uses the manual's 'Other flavors' section: Vanilla is the official distribution by Miller Puckette; Pd-extended was a flavor with a large external collection, discontinued in 2014; many tutorials assume it and need their libraries installed; the current flavors are listed on puredata.info."
+    },
+    {
+      "id": "flavor-003",
+      "question": "A tutorial I'm following uses [cyclone] objects. Will they work out of the box in Pd Vanilla?",
+      "expects": ["external"],
+      "notes": "Explains that library objects are externals, not part of Vanilla, and have to be installed/loaded (Externals chapter); suggests checking the object reference for the exact name; does not guarantee the library object behaves like a Vanilla object of a similar name."
+    },
+    {
+      "id": "flavor-004",
+      "question": "Which Pd should I install: Vanilla, Purr Data, or PlugData?",
+      "notes": "Gives the documented baseline (Vanilla is what the manual covers) and the documented fork pattern (GUI changes, pre-installed externals, PlugData as a DAW plugin), points to puredata.info for the active flavors, and marks any recommendation as a suggestion rather than a documented fact."
+    },
+    {
+      "id": "flavor-005",
+      "question": "This patch works on my friend's machine but not mine — they use Purr Data and I'm on Pd Vanilla. Why?",
+      "notes": "Treats the flavor/external difference as the first hypothesis: which objects are library externals, whether they are installed and declared, and GUI-only features. Should ask for the failing object or console error rather than guessing at a specific Purr Data difference."
+    }
+  ]
+}

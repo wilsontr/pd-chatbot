@@ -79,8 +79,13 @@ skills/granular-synthesis/
 Five skills ship: granular synthesis, DSP debugging, abstractions and `$0`
 scoping, working from a `.pd` file the user supplies, and Pd flavors (Vanilla vs
 Purr Data / Pd-L2Ork / PlugData). Each comes with a small golden set of questions
-it should improve, which the per-skill eval gate (TASK-5.15) will run before a
-skill version is activated.
+it should improve, and a version is only served once that slice passes the gate:
+CI runs the slice for every changed skill, records the activated content digest
+in `skills/activation.json`, and keeps the previous version's snapshot live when
+the slice fails. Results are reported per skill in
+[`docs/SKILLS.md`](docs/SKILLS.md), and the eval report carries the activated
+summary. See [`skills/README.md`](skills/README.md) for the command and the
+thresholds.
 
 The model sees only each skill's name and one-line description, in the
 `load_skill` tool's description; the instructions arrive as the tool result only
@@ -88,12 +93,13 @@ when it calls `load_skill(name)`. That keeps the answer prompt small while the
 project carries as many long skills as it likes. Every skill has a version — the
 declared one, or a digest of its files — and each run records the versions it
 loaded in its `done` event and run log, which is what the per-skill eval gate
-(TASK-5.15) will key on.
+keys on.
 
 The registry reads the directory rather than caching it: `ToolRegistry.refresh()`
-runs at the start of **every turn** and `load_skill` re-reads the skill folder on
-every call, so adding or editing a `SKILL.md` (in `$SKILLS_DIR`, default `skills/`)
-takes effect on the next turn with no restart. See
+runs at the start of **every turn**, so activating a skill version takes effect
+on the next turn with no restart. Editing a `SKILL.md` is not enough on its own —
+the gate has to activate the new digest first (in `$SKILLS_DIR`, default
+`skills/`). See
 [`skills/README.md`](skills/README.md) for the format and the trust rules.
 
 ### Retrieval

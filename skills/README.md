@@ -82,19 +82,73 @@ Every skill shipped here carries the small question list it is supposed to impro
 name mismatch, a duplicate id, an empty question or an out-of-range count, so a
 schema slip cannot quietly produce an eval slice that measures nothing. Because
 `golden.json` lives in the skill folder it is part of the version digest: changing
-the questions produces a new skill version, and TASK-5.15's gate then has to pass
-that version's own slice before it is active.
+the questions produces a new skill version, which has to pass the gate below.
+
+## Activation: a skill version is a deployable unit
+
+A skill folder is **not** live just because it changed. `skills/activation.json`
+pins, per skill, the content digest that may serve:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "granular-synthesis": {
+      "version": "41e503ae5451",
+      "digest": "41e503ae5451…",
+      "activated_at": "2026-11-26T00:15:28Z",
+      "activated_by": "github-actions[bot]",
+      "metrics": {"faithfulness_mean": 4.7, "relevance_mean": 4.9, "load_rate": 1.0}
+    }
+  }
+}
+```
+
+The snapshot of each activated digest lives in `skills/.activated/<name>/<digest>/`.
+Serving resolves to that snapshot whenever the working folder's digest does not
+match the manifest, so an ungated edit is ignored and the **previously activated
+version keeps serving**. If the snapshot is missing, the skill is not served at
+all — a manifest that cannot be honoured fails closed.
+
+A directory with **no** `activation.json` is the development view: every folder
+serves. That is how the test suite and a scratch `$SKILLS_DIR` behave.
+`SKILLS_ACTIVATION=off` gives you the same permissive view in a repository that
+does have a manifest, which is the quickest way to iterate on a skill locally.
+
+| Command | What it does |
+|---|---|
+| `python -m evaluation.skills --changed-from origin/main --gate --activate` | CI: run the changed skills' slices, gate them, pin the winners |
+| `python -m evaluation.skills --skills granular-synthesis --gate` | Run one slice and check the gate without activating |
+| `python -m evaluation.skills --all --gate` | Run every slice (a release check) |
+| `python -m evaluation.skills --render-report docs/SKILLS.md` | Rewrite the per-skill report from the manifest, no API calls |
+| `python -m evaluation.skills --baseline` | Bootstrap: pin current versions unmeasured. CI never calls it |
+
+The gate floors are the generation eval's judge floors plus a load-rate floor
+(4.0 faithfulness, 4.5 relevance, 4.0 citation, at least half the slice must
+actually call `load_skill` — a skill nobody selects is not helping). A slice is
+answered by the real agent with only the skill under test available, so the
+measurement is attributable to that skill. Results are in
+[`docs/SKILLS.md`](../docs/SKILLS.md), and the generated
+[`docs/EVAL.md`](../docs/EVAL.md) carries a per-skill summary from the manifest.
+
+`.github/workflows/skills.yml` runs the gate for the skills a pull request
+changes, commits the activation and the report back to the PR branch, and fails
+the job on a missed threshold. A failed slice changes nothing, which is exactly
+how the previous version stays live. A direct push to `main` that skips the
+workflow leaves the changed skill on its previously activated version (and a new
+skill is not served at all); run the workflow from the Actions tab, or
+`python -m evaluation.skills --changed-from HEAD~1 --gate --activate` locally, to
+publish it.
 
 ## Hot reload
 
 The registry reads the directory; it does not cache a copy across turns.
 
 * The loop calls `ToolRegistry.refresh()` at the start of **every turn**, so a
-  skill added while a session is running appears in the next turn's tool
-  description. No restart, no redeploy.
-* `load_skill` re-reads the skill's folder on every call, so an edited
-  `SKILL.md` (or a changed bundled file or golden set, which changes the digest)
-  is served the next time it is loaded.
+  newly activated skill (or a new snapshot) is served from the next turn on, with
+  no restart.
+* `load_skill` re-reads the activated version on every call, so activating a new
+  version takes effect on the next load.
 
 The watched directory is `$SKILLS_DIR`, or `skills/` in the repository when the
 variable is unset.
@@ -105,8 +159,9 @@ Every load records the skill name and the version the model actually read. The
 record travels in the `load_skill` tool result (`data.loaded_skill`), the run's
 `done` event (`skills`), the Langfuse trace metadata, and
 `RunStore.reconstruct_state()` — so a stored run can be audited for the exact
-skill version that shaped its answer. This is the hook the eval gate
-(TASK-5.15) uses to decide whether a skill version is good enough to activate.
+skill version that shaped its answer. The gate's per-skill report
+([`docs/SKILLS.md`](../docs/SKILLS.md)) stores the measured evidence next to the
+activated digest, so a version's numbers travel with the version that earned them.
 
 ## Trust
 

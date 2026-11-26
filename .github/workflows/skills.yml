@@ -1,0 +1,142 @@
+name: Skill eval gate
+
+# A skill is a deployable unit: its golden slice must pass before its version is
+# activated (skills/activation.json) and served. This workflow runs the slice for
+# every skill a pull request changes, gates it, and commits the activation and
+# the updated per-skill report (docs/SKILLS.md) back to the PR branch.
+#
+# A failed slice fails the job and leaves the manifest untouched, so the
+# previously activated snapshot keeps serving — the rollback is simply "not
+# activating". A direct push to main that skips this workflow leaves the changed
+# skill serving its previously activated version (or not serving at all if it is
+# new); run the job manually from the Actions tab to publish it.
+#
+# Cost: one agent run plus three judge calls per golden question. The slices are
+# 3-12 questions, so a typical single-skill change costs a few cents; only
+# changed skills run.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'skills/**'
+      - 'agent/skills/**'
+      - 'agent/tools/skills.py'
+      - 'evaluation/skills.py'
+      - 'evaluation/gates.py'
+      - '.github/workflows/skills.yml'
+  workflow_dispatch:
+    inputs:
+      skills:
+        description: 'Comma-separated skill names (empty = every installed skill)'
+        type: string
+        default: ''
+
+concurrency:
+  group: skills-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  skill-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Needed to commit the activation and snapshot back to the PR branch.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The diff against the base branch needs history.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build ChromaDB index (embeddings must be precomputed)
+        env:
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: python embed_and_index.py
+
+      - name: Determine which skills changed
+        id: changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          INPUT_SKILLS: ${{ github.event.inputs.skills }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${INPUT_SKILLS:-}" ]]; then
+            skills="$INPUT_SKILLS"
+            mode="--skills"
+            run="true"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch -q --no-tags origin "$BASE_REF"
+            skills=$(git diff --name-only "origin/$BASE_REF...HEAD" -- skills/ \
+              | awk -F/ 'NF >= 3 && $2 !~ /^\./ && $2 != "activation.json" && $2 != "README.md" { print $2 }' \
+              | sort -u | paste -sd, -)
+            mode="--skills"
+            [[ -n "$skills" ]] && run="true" || run="false"
+          else
+            skills=""
+            mode="--all"
+            run="true"
+          fi
+          {
+            echo "skills=$skills"
+            echo "mode=$mode"
+            echo "run=$run"
+          } >> "$GITHUB_OUTPUT"
+          echo "Changed skills: ${skills:-every installed skill}"
+
+      - name: Run the skill slices (gated)
+        if: steps.changed.outputs.run == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          SKILL_MODE: ${{ steps.changed.outputs.mode }}
+          SKILL_NAMES: ${{ steps.changed.outputs.skills }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKILL_MODE" == "--all" ]]; then
+            selection=(--all)
+          else
+            selection=(--skills "$SKILL_NAMES")
+          fi
+          python -m evaluation.skills \
+            "${selection[@]}" \
+            --gate --activate \
+            --report docs/SKILLS.md \
+            --output skills_eval.json \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the per-question results
+        # always(): a failed slice's JSON is the evidence for why it failed.
+        if: always() && steps.changed.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-eval
+          path: skills_eval.json
+
+      # Committing back only works for branches in this repository; a pull
+      # request from a fork cannot push with GITHUB_TOKEN, and the job fails
+      # with a clear "denied" message rather than silently skipping activation.
+      - name: Commit the activation and report to the PR branch
+        if: github.event_name == 'pull_request' && steps.changed.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add skills/activation.json docs/SKILLS.md
+          if [[ -d skills/.activated ]]; then
+            git add skills/.activated
+          fi
+          if git diff --cached --quiet; then
+            echo "No activation change to commit"
+            exit 0
+          fi
+          git commit -m 'ci: activate evaluated skill versions [skip ci]'
+          git push origin "HEAD:${{ github.head_ref }}"

@@ -158,15 +158,29 @@ one-line descriptions), and the instructions plus a list of the skill's bundled
 files arrive as the tool result. Versions are the declared `version`, or a digest
 of the skill's files, so an edit changes the version without anyone bumping a
 number. Hot reload is per turn: `ToolRegistry.refresh()` runs at the top of every
-loop turn and `load_skill` re-reads the folder on every call, so a new or edited
-skill is live on the next turn (and the durable path rebuilds its tools each
-turn). *Done in TASK-5.14: five skills ship under `skills/` — granular
-synthesis, DSP debugging, abstractions and `$0`, working from a supplied `.pd`
-file, and Pd flavors — each with a `golden.json` question slice that
-`agent/skills/golden.py` validates on read; the slice is part of the skill
-version, so changing the questions changes the version the gate will judge.* Each run records what it loaded: `LoopState.loaded_skills` →
+loop turn, so a newly activated skill version is live on the next turn (and the
+durable path rebuilds its tools each turn). *Done in TASK-5.14: five skills ship
+under `skills/` — granular synthesis, DSP debugging, abstractions and `$0`,
+working from a supplied `.pd` file, and Pd flavors — each with a `golden.json`
+question slice that `agent/skills/golden.py` validates on read; the slice is part
+of the skill version, so changing the questions changes the version the gate
+judges.* Each run records what it loaded: `LoopState.loaded_skills` →
 `Done.skills`, the run log, `RunStore.reconstruct_state()` and the Langfuse
-trace metadata. The eval gate that consumes those records is still TASK-5.15.
+trace metadata.
+
+*Done in TASK-5.15: the gate is real.* `evaluation/skills.py` answers a skill's
+slice with the shipped agent (that skill only), judges it with the generation
+rubric and deterministic claim checks, and enforces the generation judge floors
+plus a load-rate floor: a skill the model never selects from its description is
+not improving anything. `skills/activation.json` pins the content **digest** that
+may serve, and `skills/.activated/<name>/<digest>/` keeps that snapshot. When the
+working folder's digest does not match, the snapshot serves and an ungated edit
+is ignored — so a failed slice leaves the previous version live. A directory
+without a manifest is the permissive development view, and `SKILLS_ACTIVATION=off`
+escapes a gated checkout. `.github/workflows/skills.yml` runs the changed skills
+on a pull request, activates the versions that pass (committing the manifest,
+snapshots and `docs/SKILLS.md` back to the branch), and fails the job otherwise;
+the generated `docs/EVAL.md` carries a per-skill summary from the manifest.
 
 **Concepts to learn:** progressive disclosure of context, MCP, versioned
 capability registries.

@@ -37,6 +37,8 @@ the gate logic is unit-testable without keys.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Mapping
 
 from model_config import ANSWER_MODEL, JUDGE_MODEL
@@ -84,6 +86,126 @@ AGENT_THRESHOLDS: dict[str, float] = {
 # A 10-entry CI run often has 0-1 tool errors; gating on n=1 would be noisy,
 # while reporting still shows recovery_rate whenever tasks_with_errors >= 1.
 MIN_RECOVERY_ERROR_TASKS = 2
+
+
+# --- Per-skill gate (TASK-5.15) ---------------------------------------------
+
+# A skill version is activated only when its own slice clears the generation
+# judge floors *and* the skill is actually selected from its description. The
+# load-rate floor is the skill-specific part: the golden questions are written to
+# trigger the skill, so a slice where the model never calls `load_skill` says the
+# description is not doing its job, however good the answers look.
+SKILL_THRESHOLDS: dict[str, float] = {
+    **GENERATION_THRESHOLDS,
+    "min_load_rate": 0.5,
+}
+
+
+def format_skill_thresholds(thresholds: Mapping[str, float] | None = None) -> str:
+    """Human-readable summary of the per-skill gate thresholds."""
+    t = SKILL_THRESHOLDS if thresholds is None else thresholds
+    parts = [
+        f"{dimension} >= {minimum:g}"
+        for dimension, minimum in GENERATION_THRESHOLDS.items()
+    ]
+    if "min_load_rate" in t:
+        parts.append(f"load rate >= {t['min_load_rate']:.0%}")
+    return ", ".join(parts)
+
+
+def check_skill_thresholds(
+    result: Mapping[str, Any],
+    thresholds: Mapping[str, float] | None = None,
+) -> list[str]:
+    """Return one message per threshold a skill slice misses.
+
+    ``result`` is one ``evaluation.skills.run_skill_eval`` summary. A slice with
+    no judged answer cannot have passed, so it fails without looking at means.
+    """
+    t = SKILL_THRESHOLDS if thresholds is None else thresholds
+    name = str(result.get("skill") or "skill")
+    if int(result.get("judged") or 0) <= 0:
+        return [f"{name}: no answer in the slice could be judged"]
+
+    failures: list[str] = []
+    for dimension in GENERATION_THRESHOLDS:
+        mean = result.get(f"{dimension}_mean")
+        minimum = t.get(dimension, GENERATION_THRESHOLDS[dimension])
+        if not isinstance(mean, (int, float)):
+            failures.append(f"{name}: {dimension} has no usable score")
+        elif mean < minimum:
+            failures.append(f"{name}: {dimension} {mean:.2f} < {minimum:g}")
+
+    minimum_load = t.get("min_load_rate")
+    if minimum_load is not None:
+        load_rate = result.get("load_rate")
+        if not isinstance(load_rate, (int, float)):
+            failures.append(f"{name}: load rate is missing")
+        elif load_rate < minimum_load:
+            failures.append(
+                f"{name}: skill loaded for {load_rate:.0%} of its slice "
+                f"< {minimum_load:.0%}"
+            )
+    return failures
+
+
+def skills_summary_markdown(skills_root: str | Path | None = None) -> str:
+    """Per-skill section for the evaluation report, from the activation manifest.
+
+    Returns an empty string when the repository has no manifest (a development
+    checkout before the gate was introduced). Kept dependency-free so the report
+    builder and its tests do not need the eval harness.
+    """
+    root = (
+        Path(skills_root)
+        if skills_root is not None
+        else Path(__file__).resolve().parents[1] / "skills"
+    )
+    path = root / "activation.json"
+    if not path.is_file():
+        return ""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    skills = raw.get("skills") if isinstance(raw, dict) else None
+    if not isinstance(skills, dict) or not skills:
+        return ""
+
+    def metrics_cell(metrics: Mapping[str, Any], key: str) -> str:
+        value = metrics.get(key)
+        return f"{value:.2f}" if isinstance(value, (int, float)) else "—"
+
+    lines = [
+        "## Skills (eval-gated)",
+        "",
+        "Each skill version is served only after its own golden slice passes the "
+        "gate in CI; the activated version and its measured evidence live in "
+        "[`skills/activation.json`](../skills/activation.json). Per-question results "
+        "and the current thresholds are in [SKILLS.md](SKILLS.md).",
+        "",
+        "| Skill | Activated version | Faithfulness | Relevance | Evidence | Activated |",
+        "|---|---|---|---|---|---|",
+    ]
+    for name in sorted(skills):
+        entry = skills[name] if isinstance(skills[name], dict) else {}
+        metrics = entry.get("metrics") if isinstance(entry.get("metrics"), dict) else {}
+        evidence = "baseline" if metrics.get("baseline") else "gated"
+        when = " · ".join(
+            str(bit) for bit in (entry.get("activated_at"), entry.get("activated_by")) if bit
+        )
+        lines.append(
+            "| {name} | `{version}` | {faith} | {relevance} | {evidence} | {when} |".format(
+                name=name,
+                version=entry.get("version", ""),
+                faith=metrics_cell(metrics, "faithfulness_mean"),
+                relevance=metrics_cell(metrics, "relevance_mean"),
+                evidence=evidence,
+                when=when or "—",
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _mean_key(dimension: str) -> str:

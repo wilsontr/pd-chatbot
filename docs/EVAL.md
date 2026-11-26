@@ -54,6 +54,18 @@ Offline checks run on every scored answer ([`evaluation/claims.py`](../evaluatio
 
 - **Adherence:** 100% of 20 scope cases (0 miss)
 
+## Skills (eval-gated)
+
+Each skill version is served only after its own golden slice passes the gate in CI; the activated version and its measured evidence live in [`skills/activation.json`](../skills/activation.json). Per-question results and the current thresholds are in [SKILLS.md](SKILLS.md).
+
+| Skill | Activated version | Faithfulness | Relevance | Evidence | Activated |
+|---|---|---|---|---|---|
+| abstractions-and-dollar-zero | `5433fba8eed4` | — | — | baseline | 2026-11-26T00:15:28Z · baseline |
+| dsp-debugging | `b10d1256e39a` | — | — | baseline | 2026-11-26T00:15:28Z · baseline |
+| granular-synthesis | `41e503ae5451` | — | — | baseline | 2026-11-26T00:15:28Z · baseline |
+| pd-flavors | `dfec472f9f1c` | — | — | baseline | 2026-11-26T00:15:28Z · baseline |
+| working-from-a-pd-file | `2916d46307a2` | — | — | baseline | 2026-11-26T00:15:28Z · baseline |
+
 ---
 *Thresholds enforced in CI: recall@5 >= 60%, MRR >= 0.30, hybrid >= vector-only, hybrid >= BM25-only.*
 

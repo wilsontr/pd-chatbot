@@ -144,8 +144,14 @@ class TestGoldenSetLoader:
 
 @pytest.fixture(scope="module")
 def registry() -> SkillRegistry:
-    """The real skills/ folder, scanned once for the content checks."""
-    return SkillRegistry(REPO_SKILLS)
+    """The real skills/ folder, scanned once for the content checks.
+
+    Content checks read the working folders (``activation=False``): a skill edit
+    on a pull request is legitimately ahead of its activation, and the shipped
+    content is what these tests are about. Activation gating has its own tests in
+    ``test_skill_activation.py``.
+    """
+    return SkillRegistry(REPO_SKILLS, activation=False)
 
 
 class TestShippedSkills:
@@ -205,3 +211,19 @@ class TestShippedSkills:
     def test_the_golden_set_is_not_advertised_as_a_bundled_file(self, registry):
         for skill in registry.skills():
             assert GOLDEN_FILENAME not in skill.files
+
+    def test_every_activated_digest_has_its_snapshot(self):
+        """The deploy artifact the gate depends on is intact.
+
+        Working folders may legitimately be ahead of the manifest (a pull request
+        that changes a skill, before CI activates it); what must never be missing
+        is the snapshot that keeps the activated version serving.
+        """
+        from agent.skills.activation import load_manifest, skill_digest, snapshot_path
+
+        entries = load_manifest(REPO_SKILLS)
+        assert entries, "skills/activation.json is missing"
+        for name, entry in entries.items():
+            snapshot = snapshot_path(REPO_SKILLS, name, entry.digest)
+            assert snapshot.is_dir(), f"{name} has no snapshot for {entry.digest[:12]}"
+            assert skill_digest(snapshot) == entry.digest

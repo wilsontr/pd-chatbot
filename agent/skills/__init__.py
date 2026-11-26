@@ -37,12 +37,24 @@ not take the agent's other skills offline.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Collection
+
+from .activation import (
+    ACTIVATION_FILENAME,
+    ActivationEntry,
+    ActivationError,
+    activation_enabled_by_env,
+    iter_skill_files,
+    load_manifest,
+    manifest_path,
+    skill_digest,
+    snapshot_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +71,6 @@ _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 #: A skill description is a one-line trigger, not a document.
 MAX_DESCRIPTION_CHARS = 500
-
-_IGNORED_DIRS = frozenset({"__pycache__", "node_modules"})
-_IGNORED_FILES = frozenset({".DS_Store"})
 
 DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
 
@@ -145,43 +154,17 @@ def parse_front_matter(text: str) -> tuple[dict[str, str], str]:
     return {}, text
 
 
-def _iter_skill_files(directory: Path) -> list[Path]:
-    """Every content file under a skill folder, deterministically ordered."""
-    files = []
-    for path in sorted(directory.rglob("*")):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(directory)
-        if any(part.startswith(".") or part in _IGNORED_DIRS for part in relative.parts):
-            continue
-        if relative.name in _IGNORED_FILES:
-            continue
-        files.append(relative)
-    return files
-
-
-def _digest(directory: Path, files: list[Path]) -> str:
-    """Hash the skill's files (paths and contents) into a stable content identity."""
-    hasher = hashlib.sha256()
-    for relative in files:
-        hasher.update(relative.as_posix().encode("utf-8"))
-        hasher.update(b"\0")
-        try:
-            with (directory / relative).open("rb") as handle:
-                for block in iter(lambda: handle.read(65536), b""):
-                    hasher.update(block)
-        except OSError:  # a file vanished mid-scan; the next refresh will catch it
-            continue
-        hasher.update(b"\0")
-    return hasher.hexdigest()
-
-
-def _read_skill(directory: Path) -> Skill | None:
+def _read_skill(directory: Path, *, expected_name: str | None = None) -> Skill | None:
     """Read one folder into a ``Skill``, or ``None`` when it is not a skill folder.
+
+    ``expected_name`` is the name the skill must claim. It defaults to the
+    folder's own name; an activated snapshot passes the skill name because its
+    folder is named after the version.
 
     Raises ``SkillError`` for a folder that has a ``SKILL.md`` but cannot be
     served (bad name, missing description, empty instructions).
     """
+    expected = expected_name or directory.name
     skill_file = next(
         (directory / name for name in _ACCEPTED_FILENAMES if (directory / name).is_file()),
         None,
@@ -204,11 +187,11 @@ def _read_skill(directory: Path) -> Skill | None:
             directory,
             f"invalid skill name {name!r}; use lowercase letters, digits, '-', '_' or '.'",
         )
-    if name != directory.name:
+    if name != expected:
         raise SkillError(
             directory,
-            f"front-matter name {name!r} does not match its folder name "
-            f"{directory.name!r}; they must be the same so the skill can be found",
+            f"front-matter name {name!r} does not match {expected!r}; a skill's "
+            "name must be stable so it can be found",
         )
     if not description:
         raise SkillError(directory, "SKILL.md has no 'description' front-matter field")
@@ -223,8 +206,8 @@ def _read_skill(directory: Path) -> Skill | None:
     if not instructions:
         raise SkillError(directory, "SKILL.md has front matter but no instructions")
 
-    files = _iter_skill_files(directory)
-    digest = _digest(directory, files)
+    files = iter_skill_files(directory)
+    digest = skill_digest(directory, files)
     bundled = tuple(
         relative.as_posix()
         for relative in files
@@ -249,13 +232,100 @@ class SkillRegistry:
     skill from disk so an edited ``SKILL.md`` is served without a restart.
     Instances are cheap and are not shared between requests, which keeps a
     mid-request refresh from leaking between concurrent runs.
+
+    When the directory has an activation manifest, only the pinned version of a
+    skill is served; an edited working folder is ignored until its version is
+    activated, and the activated snapshot keeps serving in the meantime. A
+    directory without a manifest is the development view: every folder is served.
+    Pass ``activation=False`` to force that view, or set ``SKILLS_ACTIVATION=off``.
     """
 
-    def __init__(self, root: str | Path | None = None):
+    def __init__(
+        self,
+        root: str | Path | None = None,
+        *,
+        activation: bool | None = None,
+        only: Collection[str] | None = None,
+    ):
         self.root: Path = Path(root).expanduser() if root is not None else default_skills_root()
+        self._activation = activation
+        self._only = frozenset(only) if only is not None else None
         self._skills: dict[str, Skill] = {}
         self._diagnostics: list[SkillDiagnostic] = []
+        self._manifest: dict[str, ActivationEntry] = {}
+        self._strict = False
         self._loaded = False
+
+    # -- activation ----------------------------------------------------------
+
+    @property
+    def strict(self) -> bool:
+        """True when only activated versions are served."""
+        if not self._loaded:
+            self.refresh()
+        return self._strict
+
+    def _use_activation(self) -> bool:
+        if self._activation is False:
+            return False
+        if self._activation is True:
+            return True
+        return activation_enabled_by_env() and manifest_path(self.root).is_file()
+
+    def _apply_activation(self, skill: Skill) -> Skill | None:
+        """Return the version this skill may serve, or ``None`` when none may."""
+        if not self._strict:
+            return skill
+        entry = self._manifest.get(skill.name)
+        if entry is None:
+            self._diagnostics.append(SkillDiagnostic(
+                skill.path,
+                f"not activated: no entry for {skill.name!r} in activation.json",
+            ))
+            logger.warning("skill %r is not activated; not serving it", skill.name)
+            return None
+        if entry.digest == skill.digest:
+            return skill
+
+        try:
+            snapshot = snapshot_path(self.root, skill.name, entry.digest)
+        except ActivationError as exc:  # corrupt manifest entry
+            self._diagnostics.append(SkillDiagnostic(manifest_path(self.root), str(exc)))
+            return None
+        if not snapshot.is_dir():
+            self._diagnostics.append(SkillDiagnostic(
+                skill.path,
+                f"working content {skill.version} is not activated and the "
+                f"activated version {entry.version} has no snapshot",
+            ))
+            logger.warning(
+                "skill %r is at %s but %s is activated and has no snapshot",
+                skill.name, skill.version, entry.version,
+            )
+            return None
+        try:
+            activated = _read_skill(snapshot, expected_name=skill.name)
+        except SkillError as exc:
+            self._diagnostics.append(SkillDiagnostic(
+                snapshot, f"activated snapshot is unreadable: {exc.message}"
+            ))
+            logger.warning("activated snapshot for %r is unreadable: %s", skill.name, exc.message)
+            return None
+        if activated is None or activated.digest != entry.digest:
+            self._diagnostics.append(SkillDiagnostic(
+                snapshot,
+                f"activated snapshot does not match pinned digest {entry.digest[:12]}",
+            ))
+            logger.warning(
+                "activated snapshot for %r does not match %s",
+                skill.name, entry.digest[:12],
+            )
+            return None
+        logger.debug(
+            "serving activated version %s (%s) of %r; working folder is %s",
+            entry.version, entry.digest[:12], skill.name, skill.version,
+        )
+        return activated
 
     # -- discovery -----------------------------------------------------------
 
@@ -264,11 +334,23 @@ class SkillRegistry:
         self._skills = {}
         self._diagnostics = []
         self._loaded = True
+        self._strict = self._use_activation()
+        self._manifest = {}
+        if self._strict:
+            try:
+                self._manifest = load_manifest(self.root) or {}
+            except ActivationError as exc:
+                # Fail closed: an unreadable manifest cannot vouch for anything.
+                self._diagnostics.append(SkillDiagnostic(manifest_path(self.root), str(exc)))
+                logger.error("activation manifest is unusable: %s", exc)
+
         if not self.root.is_dir():
             logger.debug("skills directory %s does not exist", self.root)
             return ()
         for entry in sorted(self.root.iterdir(), key=lambda path: path.name):
-            if not entry.is_dir() or entry.name.startswith(".") or entry.name in _IGNORED_DIRS:
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            if self._only is not None and entry.name not in self._only:
                 continue
             try:
                 skill = _read_skill(entry)
@@ -278,15 +360,19 @@ class SkillRegistry:
                 continue
             if skill is None:
                 continue  # a folder without a SKILL.md is not a skill
-            existing = self._skills.get(skill.name)
+            served = self._apply_activation(skill)
+            if served is None:
+                continue
+            existing = self._skills.get(served.name)
             if existing is not None:
                 message = (
-                    f"duplicate skill name {skill.name!r}; already loaded from {existing.path}"
+                    f"duplicate skill name {served.name!r}; already loaded from "
+                    f"{existing.path}"
                 )
                 self._diagnostics.append(SkillDiagnostic(entry, message))
                 logger.warning("skipping skill at %s: %s", entry, message)
                 continue
-            self._skills[skill.name] = skill
+            self._skills[served.name] = served
         return self.skills()
 
     def skills(self) -> tuple[Skill, ...]:
@@ -308,10 +394,24 @@ class SkillRegistry:
         return tuple(self._diagnostics)
 
     def get(self, name: str) -> Skill | None:
-        """Load one skill, re-reading its folder so edits apply immediately."""
+        """Load one skill, re-reading its folder (and activation state)."""
         key = (name or "").strip()
         if not key:
             return None
+        if self._only is not None and key not in self._only:
+            return None
+        if not self._loaded:
+            self.refresh()
+        else:
+            # A manifest or snapshot may have changed since the last scan.
+            self._strict = self._use_activation()
+            if self._strict:
+                try:
+                    self._manifest = load_manifest(self.root) or {}
+                except ActivationError:
+                    # Fail closed: a manifest that cannot be read vouches for
+                    # nothing, so nothing is served.
+                    self._manifest = {}
         directory = self.root / key
         if directory.is_dir():
             try:
@@ -325,12 +425,14 @@ class SkillRegistry:
                 return None
             if skill is None:
                 self._skills.pop(key, None)
-            else:
-                self._skills[skill.name] = skill
-            return skill
+                return None
+            served = self._apply_activation(skill)
+            if served is None:
+                self._skills.pop(key, None)
+                return None
+            self._skills[served.name] = served
+            return served
         # The folder is gone: drop a stale entry instead of serving it forever.
-        if not self._loaded:
-            self.refresh()
         self._skills.pop(key, None)
         return None
 
@@ -343,6 +445,7 @@ def default_skill_registry() -> SkillRegistry:
 __all__ = [
     "DEFAULT_SKILLS_DIR",
     "GOLDEN_FILENAME",
+    "ACTIVATION_FILENAME",
     "MAX_DESCRIPTION_CHARS",
     "SKILL_FILENAME",
     "Skill",
@@ -350,6 +453,7 @@ __all__ = [
     "SkillError",
     "SkillRegistry",
     "default_skill_registry",
+    "manifest_path",
     "default_skills_root",
     "parse_front_matter",
 ]

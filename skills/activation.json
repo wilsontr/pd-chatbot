@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "skills": {
+    "abstractions-and-dollar-zero": {
+      "version": "5433fba8eed4",
+      "digest": "5433fba8eed4f446e508d80d2fd4470562bce4ee59f6f2532fd34cfe0c742aec",
+      "activated_at": "2026-11-26T00:15:28Z",
+      "activated_by": "baseline",
+      "metrics": {
+        "baseline": true,
+        "reason": "TASK-5.15 pre-gate baseline"
+      }
+    },
+    "dsp-debugging": {
+      "version": "b10d1256e39a",
+      "digest": "b10d1256e39a5acad80651edeaf114e1eefde55923c8218c64816d99a4a951e3",
+      "activated_at": "2026-11-26T00:15:28Z",
+      "activated_by": "baseline",
+      "metrics": {
+        "baseline": true,
+        "reason": "TASK-5.15 pre-gate baseline"
+      }
+    },
+    "granular-synthesis": {
+      "version": "41e503ae5451",
+      "digest": "41e503ae545146eb1fc640a830582db76b4a94961bf3f7787aeb2c8023810904",
+      "activated_at": "2026-11-26T00:15:28Z",
+      "activated_by": "baseline",
+      "metrics": {
+        "baseline": true,
+        "reason": "TASK-5.15 pre-gate baseline"
+      }
+    },
+    "pd-flavors": {
+      "version": "dfec472f9f1c",
+      "digest": "dfec472f9f1c95bf52827fe44acb9ef2f1a43ad109edb2e2439bdda7480630c0",
+      "activated_at": "2026-11-26T00:15:28Z",
+      "activated_by": "baseline",
+      "metrics": {
+        "baseline": true,
+        "reason": "TASK-5.15 pre-gate baseline"
+      }
+    },
+    "working-from-a-pd-file": {
+      "version": "2916d46307a2",
+      "digest": "2916d46307a2eb8f0a8d1955d1cbe90394468dd733fade7fb731d79ec6939c8f",
+      "activated_at": "2026-11-26T00:15:28Z",
+      "activated_by": "baseline",
+      "metrics": {
+        "baseline": true,
+        "reason": "TASK-5.15 pre-gate baseline"
+      }
+    }
+  }
+}

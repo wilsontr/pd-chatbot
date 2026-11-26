@@ -48,6 +48,7 @@ from .gates import (
     is_agent_arm,
     mean_score,
     recovery_stats,
+    skills_summary_markdown,
 )
 
 _STRATEGY_LABELS = {
@@ -627,6 +628,10 @@ def _build_report(results: dict, stats: dict, generation_meta: dict | None = Non
                 f"got {failure['predicted']}"
             )
         lines.append("")
+
+    skills_section = skills_summary_markdown()
+    if skills_section:
+        lines.extend(skills_section.splitlines())
 
     lines.append("---")
     if retrieval:
