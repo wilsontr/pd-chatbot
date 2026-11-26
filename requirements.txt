@@ -20,3 +20,4 @@ psycopg[binary]
 httpx
 modal
 dbos
+mcp

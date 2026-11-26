@@ -54,9 +54,10 @@ agent/tools/skills.py  load_skill  →  agent/skills/ (SKILL.md folders, re-read
 
 The loop emits a typed event stream (`text_delta`, `tool_call`, `tool_result`,
 `sources`, `artifact`, `done`) and imports no web framework, so each interface is
-a thin adapter: the web endpoint maps those events to SSE, and a CLI/Slack/MCP
-adapter maps the same stream to its own transport. Tests drive the loop with a
-scripted model client, so they need no API key.
+a thin adapter: the web endpoint maps those events to SSE, and a CLI/Slack
+adapter maps the same stream to its own transport. The [MCP server](#mcp-server)
+skips the loop and serves the tools themselves, behind the same guardrails. Tests
+drive the loop with a scripted model client, so they need no API key.
 
 `rag.py` still contains the original fixed pipeline (classify → retrieve once →
 generate → validate). It is kept as the **baseline arm** of the evaluation so the
@@ -569,6 +570,54 @@ cd frontend && npm install && npm run dev
 ```
 
 The frontend proxies `/api` to `http://localhost:8000` (configured in `vite.config.ts`).
+
+### MCP server
+
+The agent's tools are also published as an [MCP](https://modelcontextprotocol.io)
+server, so Claude Code, Claude Desktop or any other MCP client can search the Pd
+documentation and build patches with its own model. It needs the same `.env`
+(Voyage key) and built `chroma_db/` as the backend, and runs over stdio.
+
+| Tool | Offered |
+|---|---|
+| `search_docs` | always |
+| `list_patches`, `read_patch`, `write_patch` | always; `write_patch` returns the `.pd` file |
+| `load_skill` | always |
+| `run_patch`, `analyze_audio` | only when `PD_SANDBOX_BACKEND` is set ([docs/SANDBOX.md](docs/SANDBOX.md)) |
+
+Calls go through the same guardrails as the web agent
+([`agent/guardrails.py`](agent/guardrails.py) `run_guarded_tool`): the `mcp`
+interface tool policy, tool-output prompt-injection screening, and the patch
+tools' limits (12 patches and 6 sandbox runs per server session, runs of at most
+10 s). One server process is one session; restarting it clears its patches.
+
+**Claude Code:**
+
+```bash
+claude mcp add pd-chatbot -- /path/to/pd-chatbot/venv/bin/python /path/to/pd-chatbot/mcp_server.py
+# with patch execution:
+claude mcp add pd-chatbot -e PD_SANDBOX_BACKEND=docker -- /path/to/pd-chatbot/venv/bin/python /path/to/pd-chatbot/mcp_server.py
+```
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "pd-chatbot": {
+      "command": "/path/to/pd-chatbot/venv/bin/python",
+      "args": ["/path/to/pd-chatbot/mcp_server.py"],
+      "env": { "PD_SANDBOX_BACKEND": "docker" }
+    }
+  }
+}
+```
+
+Drop the `env` entry to leave patch execution off. Other clients take the same
+command and arguments. Use absolute paths: [`mcp_server.py`](mcp_server.py)
+moves to the repo root itself, so it works from whatever directory the client
+starts it in. To try it without a client, use the MCP Inspector:
+`npx @modelcontextprotocol/inspector venv/bin/python mcp_server.py`.
 
 ### Observability (optional)
 
