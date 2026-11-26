@@ -1,0 +1,32 @@
+{
+  "skill": "granular-synthesis",
+  "questions": [
+    {
+      "id": "gs-001",
+      "question": "How do I build a granular sampler in Pd that plays short grains from a recorded sample?",
+      "expects": ["grain"],
+      "notes": "Describes playing many short segments in rapid succession (the Sampling section), reads the sample from an array with tabread4~ or tabplay~, schedules the grains, and windows each one. Should distinguish the documented mechanism from the starting values it suggests."
+    },
+    {
+      "id": "gs-002",
+      "question": "Why does my grain cloud click, and how do I stop it?",
+      "notes": "Explains the discontinuity at grain edges (Enveloping samplers) and fixes it with an envelope that reaches zero at both ends: line~ per grain, or cos~ for a signal-rate window. Mentions that window shape and overlap trade off."
+    },
+    {
+      "id": "gs-003",
+      "question": "How do grain duration and read rate set the pitch of a granular sampler?",
+      "notes": "Uses the looping-sampler transposition relation from the Sampling section rather than inventing a rule: transposition is the read rate relative to the sample's own rate, scaled by the segment length. Should not present a particular grain size as a documented default."
+    },
+    {
+      "id": "gs-004",
+      "question": "How do I keep a dense grain cloud from getting too loud or clipping?",
+      "notes": "Points out that overlapping grains sum, so level has to be scaled deliberately; suggests checking with env~ (RMS dB) and clip~ to detect overload, and putting gain under a smoothed line~ control."
+    },
+    {
+      "id": "gs-005",
+      "question": "Can I use [tabplay~] instead of [tabread4~] for the grains?",
+      "expects": ["tabplay~"],
+      "notes": "Explains the trade-off from the object pages: tabplay~ plays a table segment without transposition and without interpolation artifacts, so it is cheaper; tabread4~ interpolates and is what changes pitch. A good answer names which one fits the user's goal."
+    }
+  ]
+}

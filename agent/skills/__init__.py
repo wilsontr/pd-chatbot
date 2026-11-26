@@ -47,6 +47,10 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 SKILL_FILENAME = "SKILL.md"
+#: The skill's eval slice. It is part of the folder (and of the version digest,
+#: so changing the slice bumps the version) but it is not a resource for the
+#: model, so it is left out of the bundled-file list `load_skill` returns.
+GOLDEN_FILENAME = "golden.json"
 _ACCEPTED_FILENAMES = (SKILL_FILENAME, "skill.md")
 
 #: Names appear in tool arguments and in the record of what a run loaded, so
@@ -224,7 +228,7 @@ def _read_skill(directory: Path) -> Skill | None:
     bundled = tuple(
         relative.as_posix()
         for relative in files
-        if relative.as_posix() not in _ACCEPTED_FILENAMES
+        if relative.as_posix() not in (*_ACCEPTED_FILENAMES, GOLDEN_FILENAME)
     )
     return Skill(
         name=name,
@@ -338,6 +342,7 @@ def default_skill_registry() -> SkillRegistry:
 
 __all__ = [
     "DEFAULT_SKILLS_DIR",
+    "GOLDEN_FILENAME",
     "MAX_DESCRIPTION_CHARS",
     "SKILL_FILENAME",
     "Skill",

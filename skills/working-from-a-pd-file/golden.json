@@ -1,0 +1,25 @@
+{
+  "skill": "working-from-a-pd-file",
+  "questions": [
+    {
+      "id": "pd-file-001",
+      "question": "Here is my patch — #N canvas 0 0 450 300 12; #X obj 20 20 osc~ 440; #X obj 20 80 dac~; #X connect 0 0 1 0; #X connect 0 0 1 1; — how do I add a volume control between the oscillator and the output?",
+      "notes": "Reads the canvas correctly (one osc~ feeding both dac~ inlets via box order 0->1), inserts a gain path with a smoothed control, keeps osc~'s argument, and shows the rebuilt key path. Should say that the original file was not modified and that controls/GUI are not reproduced."
+    },
+    {
+      "id": "pd-file-002",
+      "question": "What does this patch do? #N canvas 0 0 400 300 12; #X obj 20 20 phasor~ 1; #X obj 20 60 tabread4~ $0-buf; #X connect 0 0 1 0;",
+      "notes": "Explains phasor~ as a 0-1 phase ramp used as a table read index and tabread4~ as the interpolating lookup, and notes that the array contents and the phasor's scaling determine pitch — without inventing the array's size or contents."
+    },
+    {
+      "id": "pd-file-003",
+      "question": "My .pd file has a subpatch with most of the logic inside. Can you rebuild the whole thing?",
+      "notes": "Explains that the diagram tool does not model subpatches, so the agent can rebuild the key path and must list what it omitted; asks for the subpatch's contents or a description rather than pretending it read them. Should not claim to have edited the user's file."
+    },
+    {
+      "id": "pd-file-004",
+      "question": "I attached my synth.pd — can you add a filter to it?",
+      "notes": "Says plainly that this assistant has no tool that reads an uploaded file, and asks for the patch text (or the relevant objects/connections) before acting. Should not pretend to have opened the file or invent its contents."
+    }
+  ]
+}

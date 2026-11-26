@@ -160,7 +160,11 @@ of the skill's files, so an edit changes the version without anyone bumping a
 number. Hot reload is per turn: `ToolRegistry.refresh()` runs at the top of every
 loop turn and `load_skill` re-reads the folder on every call, so a new or edited
 skill is live on the next turn (and the durable path rebuilds its tools each
-turn). Each run records what it loaded: `LoopState.loaded_skills` →
+turn). *Done in TASK-5.14: five skills ship under `skills/` — granular
+synthesis, DSP debugging, abstractions and `$0`, working from a supplied `.pd`
+file, and Pd flavors — each with a `golden.json` question slice that
+`agent/skills/golden.py` validates on read; the slice is part of the skill
+version, so changing the questions changes the version the gate will judge.* Each run records what it loaded: `LoopState.loaded_skills` →
 `Done.skills`, the run log, `RunStore.reconstruct_state()` and the Langfuse
 trace metadata. The eval gate that consumes those records is still TASK-5.15.
 

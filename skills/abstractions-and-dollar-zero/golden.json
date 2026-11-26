@@ -1,0 +1,33 @@
+{
+  "skill": "abstractions-and-dollar-zero",
+  "questions": [
+    {
+      "id": "abs-001",
+      "question": "Two copies of my abstraction share the same [receive] value. How do I make them independent?",
+      "expects": ["$0"],
+      "notes": "Explains the per-patch $0 counter and the documented local-name pattern: $0-prefixed send/receive pairs, array names, value names and text names so instances do not collide. Should mention that the prefix must be on both ends."
+    },
+    {
+      "id": "abs-002",
+      "question": "Why is $1 undefined in my top-level patch but works inside my abstraction?",
+      "notes": "Explains the documented difference: object boxes expand $ at creation time from the abstraction's arguments, message boxes at message time from the incoming list, and $ variables are undefined in a new or opened document. Should not suggest a workaround that contradicts that timing."
+    },
+    {
+      "id": "abs-003",
+      "question": "What is the difference between a one-off [pd my-subpatch] and an abstraction?",
+      "expects": ["abstraction"],
+      "notes": "Contrasts the two documented kinds: a one-off subpatch's contents are saved inside the parent file and copies can be edited individually; an abstraction is a separate patch file invoked by name, shared by its instances. Should mention the practical editing consequence."
+    },
+    {
+      "id": "abs-004",
+      "question": "How do I accept a variable number of arguments in an abstraction?",
+      "expects": ["pdcontrol"],
+      "notes": "Points at pdcontrol's args message, which returns all of the patch's arguments as a list and keeps atom types, versus fixed $1/$2 substitution. May also mention nesting abstractions for staged substitution."
+    },
+    {
+      "id": "abs-005",
+      "question": "How do I use $0 in the receive or send name of an IEMgui?",
+      "notes": "Recalls the documented escaping rule: IEMgui send/receive names are set by message, so $0 has to be escaped with a backslash to be stored literally. Should not present the literal name as automatically expanded."
+    }
+  ]
+}

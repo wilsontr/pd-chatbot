@@ -159,6 +159,20 @@ class TestDiscovery:
 
         assert before.version != after.version
 
+    def test_the_golden_set_is_hashed_but_not_listed_as_a_bundled_file(self, skills_root):
+        write_skill(skills_root)
+        before = SkillRegistry(skills_root).skills()[0]
+
+        (skills_root / "granular-synthesis" / "golden.json").write_text(
+            '{"skill": "granular-synthesis", "questions": []}', encoding="utf-8"
+        )
+        after = SkillRegistry(skills_root).skills()[0]
+
+        assert after.files == ()
+        # The eval slice belongs to the skill version, but it is not a resource
+        # the model is pointed at.
+        assert after.digest != before.digest
+
     def test_a_declared_version_is_used_and_the_digest_still_tracks_content(self, skills_root):
         write_skill(skills_root, version="1.2.0")
         skill = SkillRegistry(skills_root).skills()[0]

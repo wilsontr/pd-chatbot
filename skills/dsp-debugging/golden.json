@@ -1,0 +1,32 @@
+{
+  "skill": "dsp-debugging",
+  "questions": [
+    {
+      "id": "dsp-001",
+      "question": "My Pd patch went silent after I moved it into a [block~ 1024] subpatch. What should I check?",
+      "expects": ["block~"],
+      "notes": "Works through the documented causes: one block~/switch~ per window, reblocking by power-of-two factors through inlet~/outlet~, FFT channel count following the block size, a switch that is off, and DSP/audio settings. Should not blame the model's memory of a 'known bug'."
+    },
+    {
+      "id": "dsp-002",
+      "question": "Why does switching a subpatch off with [switch~] produce a click, and how do I avoid it?",
+      "notes": "Explains the discontinuity at the switch and the documented fix: let a line~ ramp the level to zero before switching off, since a switched-off window outputs zeros and an unramped line~ can stay stuck at a non-zero value."
+    },
+    {
+      "id": "dsp-003",
+      "question": "How do the overlap and up/downsampling arguments of [block~] interact with [inlet~] and [outlet~]?",
+      "expects": ["block~"],
+      "notes": "States the documented rules: block size, overlap and resampling are set for a window and its subwindows; inlet~/outlet~ do the reblocking and only by power-of-two factors; without inlet~/outlet~ other sizes are possible. Should not invent limits that are not in the excerpts."
+    },
+    {
+      "id": "dsp-004",
+      "question": "My patch has a constant DC offset at the output. How do I find it and what can I do about it?",
+      "notes": "Explains DC as a non-zero mean rather than a signal, suggests measuring it and blocking it with a high-pass such as hip~ at a few Hz (documented as a one-pole high-pass; using it for DC is a technique), and labels any advice the docs do not cover as general practice."
+    },
+    {
+      "id": "dsp-005",
+      "question": "A feedback patch sounds one block late. What explains that, and how do I get sample-by-sample feedback?",
+      "notes": "Explains block delay and the documented option of setting the block size to 1 for 1-sample feedback, plus the ordering rules for throw~/catch~ and delay lines. Should point at the Switching and blocking section and the book's order-of-execution examples."
+    }
+  ]
+}

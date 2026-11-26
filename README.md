@@ -72,8 +72,15 @@ format) the agent can load when a question calls for one, in
 ```
 skills/granular-synthesis/
     SKILL.md          # front matter (name, description, optional version) + instructions
+    golden.json       # the questions this skill should improve
     scripts/...       # optional files the instructions refer to
 ```
+
+Five skills ship: granular synthesis, DSP debugging, abstractions and `$0`
+scoping, working from a `.pd` file the user supplies, and Pd flavors (Vanilla vs
+Purr Data / Pd-L2Ork / PlugData). Each comes with a small golden set of questions
+it should improve, which the per-skill eval gate (TASK-5.15) will run before a
+skill version is activated.
 
 The model sees only each skill's name and one-line description, in the
 `load_skill` tool's description; the instructions arrive as the tool result only
