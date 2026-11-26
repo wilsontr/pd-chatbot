@@ -32,6 +32,7 @@ evaluation/feedback_candidates*.json
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # Source HTML data (large, re-downloadable)
 manual/

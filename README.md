@@ -54,10 +54,11 @@ agent/tools/skills.py  load_skill  →  agent/skills/ (SKILL.md folders, re-read
 
 The loop emits a typed event stream (`text_delta`, `tool_call`, `tool_result`,
 `sources`, `artifact`, `done`) and imports no web framework, so each interface is
-a thin adapter: the web endpoint maps those events to SSE, and a CLI/Slack
-adapter maps the same stream to its own transport. The [MCP server](#mcp-server)
-skips the loop and serves the tools themselves, behind the same guardrails. Tests
-drive the loop with a scripted model client, so they need no API key.
+a thin adapter: the web endpoint maps those events to SSE, the
+[`pdbot` CLI](#cli-pdbot) streams them to the terminal, and a Slack adapter maps
+the same stream to its own transport. The [MCP server](#mcp-server) skips the
+loop and serves the tools themselves, behind the same guardrails. Tests drive
+the loop with a scripted model client, so they need no API key.
 
 `rag.py` still contains the original fixed pipeline (classify → retrieve once →
 generate → validate). It is kept as the **baseline arm** of the evaluation so the
@@ -570,6 +571,40 @@ cd frontend && npm install && npm run dev
 ```
 
 The frontend proxies `/api` to `http://localhost:8000` (configured in `vite.config.ts`).
+
+### CLI (`pdbot`)
+
+`pdbot` is the terminal adapter over the same agent core, sandbox runner, and run
+store. Install the project in editable mode to put `pdbot` on your `PATH`:
+
+```bash
+pip install -e . --no-deps
+```
+
+Usage:
+
+```bash
+# Stream an answer with live tool steps on stderr
+pdbot ask "how does osc~ work?"
+
+# Ask and write any generated patches (and rendered audio) to ./patches/
+pdbot ask "build a 440 Hz FM bell patch" -o ./patches
+
+# Continue a previous session's patch workspace
+pdbot ask "add a low-pass filter to it" --session <session_id> -o ./patches
+
+# Run a local .pd file in the headless Pd sandbox (and optionally save the WAV)
+pdbot run ./patches/fm-bell.pd --seconds 3 --wav ./out.wav
+
+# List recent stored runs and replay one (optionally exporting its .pd files)
+pdbot runs
+pdbot replay <run_id> -o ./replayed-patches
+```
+
+`pdbot run` and `pdbot replay` do not touch the vector index or call an LLM, so
+they work without API keys. `pdbot ask` reads `.env` and uses the same
+`RunStore` / `SessionPatchStore` defaults as the backend (pass `--no-log` to
+skip database persistence or `--db` to point at a specific database URL).
 
 ### MCP server
 

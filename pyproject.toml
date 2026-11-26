@@ -1,3 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pd-chatbot"
+version = "0.1.0"
+description = "Pure Data documentation and patching agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+pdbot = "agent.cli:main"
+
+[tool.setuptools]
+py-modules = [
+    "cost_tracker",
+    "feedback_store",
+    "llm_response",
+    "mcp_server",
+    "model_config",
+    "pd_file",
+    "pd_schema",
+    "pricing",
+    "rag",
+    "scope",
+]
+
+[tool.setuptools.packages.find]
+include = ["agent*", "sandbox*", "evaluation*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests that require API calls (deselect with '-m \"not slow\"')",
