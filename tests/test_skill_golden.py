@@ -34,6 +34,7 @@ EXPECTED_SKILLS = {
     "dsp-debugging",
     "granular-synthesis",
     "pd-flavors",
+    "wavetables",
     "working-from-a-pd-file",
 }
 

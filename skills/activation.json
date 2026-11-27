@@ -41,6 +41,25 @@
         "reason": "TASK-5.15 pre-gate baseline"
       }
     },
+    "wavetables": {
+      "version": "0cf6f136b95d",
+      "digest": "0cf6f136b95d5d4b2515be48fc40a7f16d308cd356738e2d9d7ab5d228227de7",
+      "activated_at": "2026-11-27T17:27:22Z",
+      "activated_by": "local",
+      "metrics": {
+        "questions": 4,
+        "judged": 4,
+        "task_success_rate": 1.0,
+        "load_rate": 0.75,
+        "faithfulness_mean": 4.25,
+        "relevance_mean": 5.0,
+        "citation_correctness_mean": 4.25,
+        "avg_cost_usd": 0.001733,
+        "avg_latency_ms": 6399.9,
+        "model": "claude-haiku-5-5",
+        "judge_model": "claude-haiku-4-5"
+      }
+    },
     "working-from-a-pd-file": {
       "version": "2916d46307a2",
       "digest": "2916d46307a2eb8f0a8d1955d1cbe90394468dd733fade7fb731d79ec6939c8f",

@@ -12,6 +12,7 @@ Thresholds: faithfulness >= 4, relevance >= 4.5, citation_correctness >= 4, load
 | dsp-debugging | `b10d1256e39a` | `b10d1256e39a` | baseline (not measured) | — | — | — | — | — |
 | granular-synthesis | `41e503ae5451` | `41e503ae5451` | baseline (not measured) | — | — | — | — | — |
 | pd-flavors | `dfec472f9f1c` | `dfec472f9f1c` | baseline (not measured) | — | — | — | — | — |
+| wavetables | `0cf6f136b95d` | `0cf6f136b95d` | activated | 4.25 | 5.00 | 4.25 | 100% | 75% |
 | working-from-a-pd-file | `2916d46307a2` | `2916d46307a2` | baseline (not measured) | — | — | — | — | — |
 
 Per-question results, including the judge's explanations and any claim checks, are in the run's JSON output (`--output`) and the CI job summary. The generation and retrieval eval report is in [EVAL.md](EVAL.md).
@@ -22,4 +23,5 @@ Per-question results, including the judge's explanations and any claim checks, a
 - `dsp-debugging` at `b10d1256e39a` — activated 2026-11-26T00:15:28Z by baseline
 - `granular-synthesis` at `41e503ae5451` — activated 2026-11-26T00:15:28Z by baseline
 - `pd-flavors` at `dfec472f9f1c` — activated 2026-11-26T00:15:28Z by baseline
+- `wavetables` at `0cf6f136b95d` — activated 2026-11-27T17:27:22Z by local
 - `working-from-a-pd-file` at `2916d46307a2` — activated 2026-11-26T00:15:28Z by baseline

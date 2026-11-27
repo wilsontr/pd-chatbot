@@ -20,8 +20,9 @@ skills/
     examples/grain-cloud.pd
 ```
 
-Five skills ship today: `granular-synthesis`, `dsp-debugging`,
-`abstractions-and-dollar-zero`, `working-from-a-pd-file` and `pd-flavors`.
+Six skills ship today: `granular-synthesis`, `dsp-debugging`,
+`abstractions-and-dollar-zero`, `working-from-a-pd-file`, `pd-flavors` and
+`wavetables`.
 
 `SKILL.md` opens with flat front matter:
 

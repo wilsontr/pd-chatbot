@@ -57,3 +57,27 @@ Documentation questions, first 15 golden entries x 3 trials, agent arm (judge
 | Before TASK-5.5 | 4.73 ± 0.27 | 5.00 ± 0.00 | 4.62 ± 0.08 |
 | `write_patch` only | 4.58 ± 0.34 | 4.93 ± 0.12 | 4.62 ± 0.31 |
 | With execution | 4.62 ± 0.30 | 4.89 ± 0.14 | 4.69 ± 0.16 |
+
+## Wavetables (TASK-5.28)
+
+p_14 asks for a table filled with one sine cycle on load and played at 220 Hz.
+Its failures all ran cleanly and were **silent**. In every failure the table was
+never filled; the read side was fine. The causes were a fill loop with no wire
+from `[until]` to `[f]`, a `0` sent to `[until]` (zero iterations), and a
+`[sinesum …(` message box sent nowhere because it had no leading `;` and no wire.
+The fix is the `wavetables` skill (documented `sinesum` + `[tabosc4~]` route
+first) plus a general execution rule: when a run is clean but silent, read the
+suspect values back with `[print]` before rewiring. The failing shapes and every
+prescribed route are pinned in the sandbox by
+[`tests/test_wavetables.py`](../tests/test_wavetables.py).
+
+| p_14, with execution, 6 trials | Pass | Cost per answer | Latency p50 / s |
+|---|---|---|---|
+| Before | 1/6 (5 silent) | $0.0124 | 31.1 |
+| Execution rule only | 3/6 | $0.0107 | 24.2 |
+| Rule + `wavetables` skill | **6/6** | $0.0046 | 10.1 |
+
+Full eval re-run after the change (16 x 3 per arm, 2026-11-27): **75%** without
+execution (was 73%) and **92%** with execution (unchanged). p_14 is now 3/3 in
+both arms (was 0/3 and 2/3). The other tasks move by a trial either way, which
+is within the run-to-run spread noted above.

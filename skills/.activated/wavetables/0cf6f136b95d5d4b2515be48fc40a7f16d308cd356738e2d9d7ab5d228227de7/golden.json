@@ -1,0 +1,39 @@
+{
+  "skill": "wavetables",
+  "questions": [
+    {
+      "id": "wt-001",
+      "question": "How do I build a wavetable oscillator that fills a table with one cycle of a sine wave when the patch opens and plays it at 220 Hz?",
+      "expects": [
+        "tabosc4~",
+        "sinesum"
+      ],
+      "notes": "The p_14 patch-eval question. Fills the table on load with a ';'-prefixed sinesum message to a [table] of 512 + 3 points and plays it with [tabosc4~] fed 220 Hz, citing the tabosc4~ page for the guard points and sinesum. Must not leave the sinesum message unrouted or put the frequency in tabosc4~'s creation argument."
+    },
+    {
+      "id": "wt-002",
+      "question": "How big should the table for [tabosc4~] be, and why does it need extra points?",
+      "expects": [
+        "guard"
+      ],
+      "notes": "States the documented requirement: a power of two plus three guard points (one at the start, two at the end, wraparound copies), that sinesum/cosinesum write them automatically, and the 512-points-for-up-to-15-partials guidance. Should not invent other sizes."
+    },
+    {
+      "id": "wt-003",
+      "question": "How do I fill a Pd table with a waveform that has several harmonics at different strengths?",
+      "expects": [
+        "sinesum"
+      ],
+      "notes": "Uses the sinesum (or cosinesum) array method with one amplitude per partial, sent to the table when the patch opens, and notes from the tabosc4~ page not to send new sinesum messages while the table is playing — switch tables with 'set' instead."
+    },
+    {
+      "id": "wt-004",
+      "question": "I want to read a wavetable with [phasor~] and [tabread4~] instead of [tabosc4~]. How do I scale the phasor?",
+      "expects": [
+        "tabread4~",
+        "phasor~"
+      ],
+      "notes": "Scales the 0-1 ramp from phasor~ by the table length before tabread4~, cites the tabread4~ and phasor~ pages and the book's wavetable-lookup section, and flags any guard-point offset as the answer's own detail if the excerpts do not state it."
+    }
+  ]
+}
