@@ -141,19 +141,31 @@ thing. Details in [PATCH_EVAL.md](PATCH_EVAL.md).
 
 Not every failure mode is a bug. Recording the demo run
 ([`assets/self-correction.gif`](../assets/self-correction.gif)) asked for a
-3-second reverb. The first patch used `[rev1~]`, which the sandbox's vanilla Pd
-does not have:
+3-second reverb. The first two attempts reached for Pd library reverberators,
+which the sandbox's vanilla Pd does not have:
 
 ```
-<- run_patch [ok (1225 ms)]: ran sine-reverb-lop: 1 error(s)
+<- run_patch [ok (1770 ms)]: ran sine-reverb-tail: 1 error(s)
+      error: ... couldn't create
+<- analyze_audio [ok (0 ms)]: analyzed sine-reverb-tail: silent
+<- run_patch [ok (1607 ms)]: ran sine-reverb-tail: 1 error(s)
       error: ... couldn't create
 ```
 
-The agent searched again, replaced it with a feedback delay line, re-ran, and got
-clean audio at 220 Hz. It then said plainly in the answer: *"The tail is not 3
-seconds. I could not get a true 3-second reverb."* Reporting the unmet constraint
-instead of claiming success is the behaviour the prompt asks for, and it is worth
-measuring as much as the successes.
+It searched again, replaced them with a feedback delay line
+(`[delwrite~ tail 3000]` / `[delread~ tail 1000]` / `[*~ 0.85]`), re-ran clean
+and rendered audible audio at 220 Hz. Then it said plainly what the result is
+not:
+
+> **Important: this is not a true reverb.** The `[rev1~]` and `[rev2~]` objects
+> both failed to create in this environment, so I couldn't use them. […] Its
+> repeats fade out with each pass, giving a tail that is a series of echoes
+> rather than a smooth reverb.
+
+It also flagged that the feedback gain "needs lowering before this is used for
+real". Reporting the unmet constraint instead of claiming success is the
+behaviour the prompt asks for, and it is worth measuring as much as the
+successes.
 
 ## What still gets through
 
@@ -167,11 +179,6 @@ measuring as much as the successes.
 - **libpd is not desktop Pd.** The sandbox reports `verbose(n):` prefixes and
   ignores `; pd exit`, so console-derived signals differ slightly from a GUI
   session.
-- **Budgets stop loops.** One observed run (2026-11-26) hit the 40,000-token
-  budget at turn 4 while still mid-repair: the patch had 2 Pd errors and rendered
-  silent. Re-recorded with a 120,000-token budget, the agent fixed the errors on
-  its next attempt — and the patch was *still* silent. That is exactly why the
-  spec check, not the console output, is the gate for patch quality.
 - **The scope gate is a guardrail, not a security boundary.** It fails open to
   in-scope on unknown labels, and there is no output moderation.
 

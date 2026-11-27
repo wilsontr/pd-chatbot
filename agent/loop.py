@@ -58,7 +58,17 @@ logger = logging.getLogger(__name__)
 
 # Per-run safety budgets (TASK-5.8): generous enough for normal multi-turn patch
 # debugging while bounding runaway loops or unexpectedly large tool results.
-DEFAULT_MAX_TOKENS_BUDGET = 40_000
+#
+# The token cap is sized from measured repairs, not guessed (TASK-5.27). Every
+# turn resends the conversation, so a loop that writes a patch, runs it, reads a
+# Pd error and tries again grows quickly: completed repair runs measured 55,608,
+# 64,412, 96,868, 108,386, 113,852 and 123,194 tokens, and one longer
+# trajectory passed 150,000 at turn 8 while still mid-repair. The old 40,000 cut
+# loops off after the failing run, before any fix. This cap therefore only has to
+# catch a runaway tool result, not police a legitimate repair: the turn cap above
+# it and the dollar cap below it already bound the run, and the dollar cap is the
+# money guard — those same runs cost $0.008-$0.015 each.
+DEFAULT_MAX_TOKENS_BUDGET = 400_000
 DEFAULT_MAX_COST_USD = 0.10
 
 TURN_LIMIT_NOTE = (

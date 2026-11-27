@@ -102,6 +102,20 @@ class TestRunBudgets:
         assert cfg.max_tokens_budget == DEFAULT_MAX_TOKENS_BUDGET
         assert cfg.max_cost_usd == DEFAULT_MAX_COST_USD
 
+    def test_default_token_budget_leaves_room_for_a_repair_loop(self):
+        """A repair loop must fit: write, run, read the Pd error, fix, re-run.
+
+        Measured on completed repair runs (TASK-5.27): 55,608 - 123,194 tokens,
+        with one longer trajectory past 150,000 at turn 8 while still mid-repair.
+        The default used to be 40,000, which stopped every one of them after the
+        failing run and before any fix.
+        """
+        assert DEFAULT_MAX_TOKENS_BUDGET >= 250_000, (
+            "the default token budget must not bind inside a legitimate repair "
+            "loop (observed worst case >150,000 at turn 8); the turn and dollar "
+            "caps are what bound the run"
+        )
+
     def test_token_budget_exhaustion_stops_run_with_clear_message(self):
         tool = RecordingTool("search_docs")
         client = ScriptedClient([

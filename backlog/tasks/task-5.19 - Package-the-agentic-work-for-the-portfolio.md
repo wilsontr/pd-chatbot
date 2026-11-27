@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@trevor'
 created_date: '2026-11-23 20:41'
-updated_date: '2026-11-27 04:51'
+updated_date: '2026-11-27 05:18'
 labels:
   - agent
 dependencies:
@@ -82,6 +82,8 @@ Also in this pass: the UI screenshot moved from the top to the Run section (the 
 - `.tmp/verify_task_5_19.py` asserts all four ACs objectively: the SVG parses and carries the expected module/tool/interface labels and arrows; the GIF is animated, loops, 35 frames at 1000x600, and its source recording contains a failing run followed by a clean run and non-silent audio; the WAV plotted has peak 32086/32767; the doc covers each failure family and cites files that exist; the headline carries the numbers and they match the README body and PATCH_EVAL.md. All checks pass.
 - All relative links and anchors in README.md and docs/FAILURE_MODES.md resolve.
 - Full test suite after the changes: **840 passed, 17 skipped** (docs-only change; no code touched).
+
+Follow-up (TASK-5.27): the demo GIF was re-recorded at the shipped defaults after the token budget was raised, so the published artifact no longer depends on a raised limit. The current assets/self-correction.gif comes from run_id e3b935e3ddd74686806faa6fa189c562: [rev1~] and [rev2~] both fail to create, both rendered audio checks say silent, then a feedback delay line runs clean at peak 0.6373 / 220 Hz. The run_id in the earlier note (d92d3e3f) and the 120,000-token budget mention there are superseded. FAILURE_MODES.md section 6 was re-quoted from the new run, and the harness-limit bullet was removed from that doc.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

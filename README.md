@@ -7,10 +7,11 @@ to the rendered audio, and fixes what it hears before it answers.
 
 ![The self-correction loop: a patch breaks, Pd reports the error, the agent rewrites it, and the rendered audio plays](assets/self-correction.gif)
 
-*Recorded from a real run — `pdbot ask` with `PD_SANDBOX_BACKEND=docker`, not a
-hand-written transcript: the agent wrote a reverb patch, `[rev1~]` failed to
-create in vanilla Pd, it rebuilt the effect from a feedback delay line, and the
-audio at the bottom is the WAV that run produced.*
+*Recorded from a real run at the shipped defaults — `pdbot ask` with
+`PD_SANDBOX_BACKEND=docker`, not a hand-written transcript: the agent's first two
+attempts used `[rev1~]` and `[rev2~]`, neither of which exists in the sandbox's
+vanilla Pd, so it rebuilt the effect from a feedback delay line. The audio at the
+bottom is the WAV that run produced.*
 
 Measured against the tuned RAG pipeline it replaced, on the same 30-question
 golden set, three trials per arm:
