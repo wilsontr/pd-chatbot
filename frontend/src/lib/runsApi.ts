@@ -1,3 +1,4 @@
+import { storedSessionId } from './session'
 import type { RunDetail, RunSummary } from '../types'
 
 export class RunNotFoundError extends Error {
@@ -13,8 +14,15 @@ function apiHeaders(): Record<string, string> {
   }
 }
 
-export async function fetchRun(runId: string, signal?: AbortSignal): Promise<RunDetail> {
-  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+/** One run. The server shows it only to the session it belongs to, so a run from
+ * another session reads as not found. */
+export async function fetchRun(
+  runId: string,
+  signal?: AbortSignal,
+  sessionId: string | null = storedSessionId(),
+): Promise<RunDetail> {
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
+  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}${query}`, {
     headers: apiHeaders(),
     signal,
   })
@@ -30,8 +38,11 @@ export async function fetchRun(runId: string, signal?: AbortSignal): Promise<Run
 export async function fetchRuns(
   options: { sessionId?: string | null; limit?: number; offset?: number; signal?: AbortSignal } = {},
 ): Promise<RunSummary[]> {
+  // The server lists only one session's runs: the one asked for, else this browser's.
+  const sessionId = options.sessionId ?? storedSessionId()
+  if (!sessionId) return []
   const params = new URLSearchParams()
-  if (options.sessionId) params.set('session_id', options.sessionId)
+  params.set('session_id', sessionId)
   if (options.limit) params.set('limit', String(options.limit))
   if (options.offset) params.set('offset', String(options.offset))
   const query = params.toString()
@@ -39,6 +50,9 @@ export async function fetchRuns(
     headers: apiHeaders(),
     signal: options.signal,
   })
+  if (res.status === 403) {
+    return [] // a session this server did not issue, e.g. from before a secret change
+  }
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`)
   }

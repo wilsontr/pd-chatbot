@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from agent import cache, chat, observability
+from agent import cache, chat, observability, session_tokens
 from agent.events import (
     Artifact,
     Done,
@@ -25,6 +25,7 @@ from agent.events import (
     ToolCall,
     ToolResult,
 )
+from agent.session_tokens import is_valid_session_id
 from agent.llm import ModelDelta, ModelTurn, ToolCallRequest
 from agent.store import (
     RunStore,
@@ -596,7 +597,7 @@ class TestRunsApi:
         client, _main = api_client
         chat_resp = client.post(
             "/chat",
-            json={"message": "Build an osc~ patch", "session_id": "web-session-42"},
+            json={"message": "Build an osc~ patch"},
             headers={"X-API-Key": API_KEY},
         )
         assert chat_resp.status_code == 200
@@ -605,16 +606,19 @@ class TestRunsApi:
         assert done["type"] == "done"
         run_id = done["run_id"]
         assert run_id
-        assert done["session_id"] == "web-session-42"
+        session_id = done["session_id"]
+        assert is_valid_session_id(session_id)
         assert done["langfuse_trace_id"] == "trace-api-999"
         assert done["langfuse_trace_url"] == "https://langfuse.test/traces/trace-api-999"
 
         # Fetch the full event history from GET /runs/{run_id}.
-        run_resp = client.get(f"/runs/{run_id}", headers={"X-API-Key": API_KEY})
+        run_resp = client.get(
+            f"/runs/{run_id}", params={"session_id": session_id}, headers={"X-API-Key": API_KEY}
+        )
         assert run_resp.status_code == 200
         body = run_resp.json()
         assert body["run_id"] == run_id
-        assert body["session_id"] == "web-session-42"
+        assert body["session_id"] == session_id
         assert body["status"] == "completed"
         assert body["turns"] == 3
         assert body["tool_calls"] == 2
@@ -639,11 +643,11 @@ class TestRunsApi:
         ]
         assert [e["seq"] for e in body["events"]] == list(range(len(ev_types)))
         assert all(e["run_id"] == run_id for e in body["events"])
-        assert all(e["session_id"] == "web-session-42" for e in body["events"])
+        assert all(e["session_id"] == session_id for e in body["events"])
 
         # Listing runs filters by session_id.
         list_resp = client.get(
-            "/runs", params={"session_id": "web-session-42"}, headers={"X-API-Key": API_KEY}
+            "/runs", params={"session_id": session_id}, headers={"X-API-Key": API_KEY}
         )
         assert list_resp.status_code == 200
         listed = list_resp.json()["runs"]
@@ -654,3 +658,88 @@ class TestRunsApi:
         assert client.get("/runs/missing-id", headers={"X-API-Key": API_KEY}).status_code == 404
         assert client.get("/runs/missing-id", headers={"X-API-Key": "wrong"}).status_code == 403
         assert client.get("/runs", headers={"X-API-Key": "wrong"}).status_code == 403
+
+
+def _chat(client, **body) -> dict[str, Any]:
+    """POST /chat and return its ``done`` frame."""
+    resp = client.post(
+        "/chat", json={"message": "Build an osc~ patch", **body}, headers={"X-API-Key": API_KEY}
+    )
+    assert resp.status_code == 200, resp.text
+    return _sse_frames(resp)[-1]
+
+
+class TestSessionOwnership:
+    """TASK-5.29: the public API key does not open another session's runs."""
+
+    HEADERS = {"X-API-Key": API_KEY}
+
+    def test_the_server_issues_the_session_and_a_follow_up_keeps_it(self, api_client):
+        client, _ = api_client
+        first = _chat(client)
+        assert is_valid_session_id(first["session_id"])
+        assert _chat(client, session_id=first["session_id"])["session_id"] == first["session_id"]
+
+    @pytest.mark.parametrize("forged", [
+        "web-session-42",
+        "0" * 32 + "." + "0" * 64,
+        "not-hex",
+    ])
+    def test_a_session_id_the_server_did_not_issue_is_refused(self, api_client, forged):
+        client, main = api_client
+        resp = client.post(
+            "/chat", json={"message": "hi", "session_id": forged}, headers=self.HEADERS
+        )
+        assert resp.status_code == 403
+        assert main.run_store.list_runs() == []
+
+    def test_listing_needs_the_callers_own_session(self, api_client):
+        client, _ = api_client
+        mine, theirs = _chat(client), _chat(client)
+        assert client.get("/runs", headers=self.HEADERS).status_code == 403
+        assert client.get(
+            "/runs", params={"session_id": "web-session-42"}, headers=self.HEADERS
+        ).status_code == 403
+        listed = client.get(
+            "/runs", params={"session_id": mine["session_id"]}, headers=self.HEADERS
+        ).json()["runs"]
+        assert [r["run_id"] for r in listed] == [mine["run_id"]]
+        assert theirs["run_id"] not in {r["run_id"] for r in listed}
+
+    def test_another_sessions_run_looks_like_a_missing_one(self, api_client):
+        client, _ = api_client
+        mine, theirs = _chat(client), _chat(client)
+        url = f"/runs/{theirs['run_id']}"
+        assert client.get(url, headers=self.HEADERS).status_code == 404
+        assert client.get(
+            url, params={"session_id": mine["session_id"]}, headers=self.HEADERS
+        ).status_code == 404
+        assert client.get(
+            url, params={"session_id": theirs["session_id"]}, headers=self.HEADERS
+        ).status_code == 200
+
+    def test_an_operator_key_reads_every_run_and_a_wrong_one_does_not(
+        self, api_client, monkeypatch
+    ):
+        client, main = api_client
+        monkeypatch.setattr(main, "ADMIN_API_KEYS", {"ops-key": "ops"})
+        a, b = _chat(client), _chat(client)
+        ops = {**self.HEADERS, "X-Admin-Key": "ops-key"}
+        assert {r["run_id"] for r in client.get("/runs", headers=ops).json()["runs"]} == {
+            a["run_id"], b["run_id"]
+        }
+        assert client.get(f"/runs/{a['run_id']}", headers=ops).status_code == 200
+        wrong = {**self.HEADERS, "X-Admin-Key": "guess"}
+        assert client.get("/runs", headers=wrong).status_code == 403
+        assert client.get(f"/runs/{a['run_id']}", headers=wrong).status_code == 404
+
+    def test_browsers_cannot_send_the_operator_header(self, api_client):
+        client, _ = api_client
+        preflight = client.options("/runs", headers={
+            "Origin": "http://localhost",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "X-Admin-Key",
+        })
+        assert "x-admin-key" not in preflight.headers.get(
+            "access-control-allow-headers", ""
+        ).lower()

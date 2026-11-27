@@ -494,8 +494,9 @@ def _step_resolve_approval(
     approved: bool,
     comment: str,
     timed_out: bool,
+    approver: str = "",
 ) -> None:
-    """Record ApprovalResolved and transition the run back to running."""
+    """Record ApprovalResolved, with who decided, and transition the run back to running."""
     _persist_event(
         run_id,
         session_id,
@@ -506,6 +507,7 @@ def _step_resolve_approval(
             approved=approved,
             comment=comment,
             timed_out=timed_out,
+            approver=approver,
         ),
     )
     store = get_runtime().run_store
@@ -901,9 +903,11 @@ async def durable_agent_workflow(
                 timed_out = decision is None
                 approved = bool(isinstance(decision, dict) and decision.get("approved"))
                 comment = str(decision.get("comment", "")) if isinstance(decision, dict) else ""
+                approver = str(decision.get("approver", "")) if isinstance(decision, dict) else ""
 
                 _step_resolve_approval(
-                    run_id, session_id, seq, call_id, tool_name, approved, comment, timed_out
+                    run_id, session_id, seq, call_id, tool_name, approved, comment, timed_out,
+                    approver,
                 )
                 seq += 1
 
@@ -1012,7 +1016,12 @@ async def start_durable_run(
     max_cost_usd: float | None = None,
     model_override: str | None = None,
 ) -> tuple[str, str, WorkflowHandleAsync[dict[str, Any]]]:
-    """Start a durable agent run in DBOS and return ``(run_id, session_id, handle)``."""
+    """Start a durable agent run in DBOS and return ``(run_id, session_id, handle)``.
+
+    ``interface`` and ``approved_tools`` decide which tools need a human approval,
+    so only server-side code chooses them (TASK-5.30): the HTTP endpoint always
+    passes ``web``, and an adapter such as Slack passes its own.
+    """
     rid = run_id or uuid.uuid4().hex
     sid = session_id or uuid.uuid4().hex
     with SetWorkflowID(rid):
@@ -1035,12 +1044,19 @@ async def start_durable_run(
 
 
 async def approve_run(
-    run_id: str, *, approved: bool, comment: str = ""
+    run_id: str, *, approved: bool, approver: str, comment: str = ""
 ) -> None:
-    """Deliver a human approval/denial decision to a paused durable run."""
+    """Deliver a human approval/denial decision to a paused durable run.
+
+    ``approver`` names who decided and is stored with the decision. The caller
+    must already have checked that this person may approve: this function is the
+    in-process channel (the HTTP endpoint, a future Slack button), not a gate.
+    """
+    if not approver.strip():
+        raise ValueError("an approval decision needs the approver's name")
     await DBOS.send_async(
         destination_id=run_id,
-        message={"approved": approved, "comment": comment},
+        message={"approved": approved, "comment": comment, "approver": approver.strip()},
         topic=APPROVAL_TOPIC,
     )
 

@@ -224,6 +224,7 @@ def event_from_record(event_type: str, payload: dict[str, Any]) -> AgentEvent:
             approved=bool(payload.get("approved", False)),
             comment=str(payload.get("comment", "")),
             timed_out=bool(payload.get("timed_out", False)),
+            approver=str(payload.get("approver", "")),
         )
     if event_type == Done.type:
         return Done(

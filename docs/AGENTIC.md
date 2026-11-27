@@ -118,7 +118,9 @@ and `GET /sessions/{session_id}/patches/{patch_id}.pd` serves the latest revisio
 which is what the chat UI's download button and session patch strip use. Only
 the patches a turn wrote are drawn under that turn's answer; the rest stay in the
 session. Rows unused for 30 days are pruned when a patch is next written. Per-user
-memory was not built.*
+memory was not built. Since TASK-5.29 the server mints every session id as a signed
+token and refuses ids it did not sign, so a session's runs and patches open only
+with its own id (README, "API auth").*
 
 **For the demo:** a "run timeline" page that replays a stored run step by step.
 
@@ -218,6 +220,12 @@ agent logic is separated from transport.
 - **Guardrails:** a maximum turn count, a token/dollar budget per run, and tool
   allowlists for each interface (for example, no sandbox from Slack without
   approval). Run the injection check on tool outputs, not just on user input.
+  *Since TASK-5.30 the interface, and so the approval rules, is chosen by
+  server-side code: `POST /runs/durable` always runs as `web` and refuses
+  `interface`, `approved_tools` and `pause_for_approval` fields, and an adapter
+  such as Slack calls `start_durable_run` in-process with its own interface. Only
+  an operator key (`ADMIN_API_KEYS`, `name:key`) can approve a paused run, and
+  the approver's name is stored on the `approval_resolved` event.*
 - **Artifacts:**
   - an architecture diagram
   - a 60-second video of the self-correction loop: broken patch → error →

@@ -358,7 +358,8 @@ def run_replay(
             )
         elif isinstance(ev, ApprovalResolved):
             decision = "approved" if ev.approved else ("timed out" if ev.timed_out else "denied")
-            step_lines.append(f"  [approval {decision}] {ev.tool_name}")
+            by = f" by {ev.approver}" if ev.approver else ""
+            step_lines.append(f"  [approval {decision}] {ev.tool_name}{by}")
 
     if step_lines:
         out.write("\nSteps:\n")

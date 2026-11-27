@@ -4,11 +4,11 @@ title: Add a Slack bot interface
 status: To Do
 assignee: []
 created_date: '2026-11-23 20:41'
+updated_date: '2026-11-27 21:20'
 labels:
   - agent
 dependencies:
-  - TASK-5.1
-  - TASK-5.9
+  - TASK-5.30
 parent_task_id: TASK-5
 priority: low
 type: feature

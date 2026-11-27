@@ -13,6 +13,7 @@ from sqlalchemy import update
 
 from agent import cache, chat
 from agent.events import Artifact, Done, ToolResult
+from agent.session_tokens import mint_session_id
 from agent.llm import ModelDelta, ModelTurn, ToolCallRequest
 from agent.sessions import SessionPatchStore, patch_pd_url, session_patches
 from agent.tools import ToolRegistry
@@ -424,14 +425,15 @@ class TestApi:
 
     def test_lists_session_patches_and_downloads_the_latest_pd(self, client):
         http, store = client
-        stored = store.save("s1", "tone", pd_patch("osc~ 440"), revision=1)
-        store.save("s1", "tone", pd_patch("osc~ 220"), revision=2)
+        s1, other = mint_session_id(), mint_session_id()
+        stored = store.save(s1, "tone", pd_patch("osc~ 440"), revision=1)
+        store.save(s1, "tone", pd_patch("osc~ 220"), revision=2)
 
-        assert http.get("/sessions/s1/patches").status_code in (401, 403)
-        listed = http.get("/sessions/s1/patches", headers={"X-API-Key": "k"})
+        assert http.get(f"/sessions/{s1}/patches").status_code in (401, 403)
+        listed = http.get(f"/sessions/{s1}/patches", headers={"X-API-Key": "k"})
         assert listed.status_code == 200
         payload = listed.json()
-        assert payload["session_id"] == "s1"
+        assert payload["session_id"] == s1
         assert payload["patches"] == [{
             "id": stored.patch_id,
             "name": "tone",
@@ -447,8 +449,27 @@ class TestApi:
         assert 'filename="tone.pd"' in download.headers["content-disposition"]
 
         assert http.get(
-            "/sessions/s1/patches/p_missing.pd", headers={"X-API-Key": "k"}
+            f"/sessions/{s1}/patches/p_missing.pd", headers={"X-API-Key": "k"}
         ).status_code == 404
         assert http.get(
-            "/sessions/other/patches", headers={"X-API-Key": "k"}
+            f"/sessions/{other}/patches", headers={"X-API-Key": "k"}
         ).json()["patches"] == []
+
+    @pytest.mark.parametrize("forged", ["s1", "0" * 32 + "." + "0" * 64])
+    def test_an_id_the_server_did_not_issue_opens_nothing(self, client, forged):
+        """TASK-5.29: a stored session is reachable only through the id it was issued."""
+        http, store = client
+        stored = store.save(forged, "tone", pd_patch("osc~ 440"), revision=1)
+        headers = {"X-API-Key": "k"}
+        assert http.get(f"/sessions/{forged}/patches", headers=headers).status_code == 404
+        assert http.get(stored.pd_url, headers=headers).status_code == 404
+
+    def test_one_sessions_id_does_not_open_another_sessions_patch(self, client):
+        http, store = client
+        mine, theirs = mint_session_id(), mint_session_id()
+        stored = store.save(theirs, "tone", pd_patch("osc~ 440"), revision=1)
+        headers = {"X-API-Key": "k"}
+        assert http.get(f"/sessions/{mine}/patches", headers=headers).json()["patches"] == []
+        assert http.get(
+            f"/sessions/{mine}/patches/{stored.patch_id}.pd", headers=headers
+        ).status_code == 404

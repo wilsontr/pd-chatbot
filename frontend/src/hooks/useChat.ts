@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { applyStreamEvent, finalizeRunningSteps, type StreamEvent } from '../lib/chatStream'
+import { storedSessionId, storeSessionId } from '../lib/session'
 import type { Message, HistoryItem } from '../types'
 
 export function useChat() {
@@ -7,7 +8,7 @@ export function useChat() {
   const [chatHistory, setChatHistory] = useState<HistoryItem[]>([])
   const [loading, setLoading] = useState(false)
   const [streaming, setStreaming] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(storedSessionId)
   // Bumped on every completed answer so the session patch list refetches.
   const [patchVersion, setPatchVersion] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
@@ -86,6 +87,7 @@ export function useChat() {
             sawDone = true
             if (event.session_id) {
               setSessionId(event.session_id)
+              storeSessionId(event.session_id)
             }
             setPatchVersion(version => version + 1)
             updateAssistant(last => applyStreamEvent(last, event))

@@ -135,7 +135,7 @@ export function RunListPage({
 
         {!loading && !error && runs.length === 0 && (
           <div className="rounded-xl border border-border bg-muted/20 p-8 text-center space-y-2">
-            <p className="text-sm font-medium">No runs recorded yet</p>
+            <p className="text-sm font-medium">No runs in this session yet</p>
             <p className="text-xs text-muted-foreground">
               Ask a question in the chat tab and it will appear here for step-by-step replay.
             </p>

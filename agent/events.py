@@ -217,6 +217,8 @@ class ApprovalResolved:
     approved: bool
     comment: str = ""
     timed_out: bool = False
+    #: Who decided (TASK-5.30); empty when the request timed out.
+    approver: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -226,6 +228,7 @@ class ApprovalResolved:
             "approved": self.approved,
             "comment": self.comment,
             "timed_out": self.timed_out,
+            "approver": self.approver,
         }
 
     def to_log_dict(self) -> dict[str, Any]:

@@ -476,6 +476,22 @@ env), enabling zero-downtime rotation. The `/feedback` endpoint additionally
 requires an HMAC-SHA256 signature over the payload, preventing replay attacks
 (60-second window).
 
+The API key ships in the browser bundle, so it does not identify a user. Sessions
+do: the server mints each session id as a random value signed with
+`SESSION_SECRET`, returns it in the first answer's `done` event, and refuses any id
+it did not sign. A session's runs (`GET /runs?session_id=…`,
+`GET /runs/{run_id}?session_id=…`) and patches (`/sessions/{session_id}/…`) open
+only with that id; another session's run answers 404, like a missing one. The
+browser keeps its id in `localStorage` so the Runs page can replay its own runs.
+Operator tools can read every run with an `X-Admin-Key` from `ADMIN_API_KEYS`;
+CORS does not allow that header, so no page can send it.
+
+Durable runs (`POST /runs/durable`) always use the web interface's tool policy;
+the request cannot name an interface or pre-approve a tool. Runs that need a
+human approval (Slack's sandbox calls) are started by server-side adapters, and
+only an operator key can approve or deny them (`POST /runs/{run_id}/approve`).
+The operator's name is stored with the decision.
+
 ## Stack
 
 **Backend**
@@ -559,6 +575,10 @@ Create a `.env` file:
 VOYAGE_API_KEY=...
 ANTHROPIC_API_KEY=...
 CHAT_API_KEYS=...            # comma-separated for rotation; e.g. "key1,key2"
+SESSION_SECRET=...           # signs session ids; comma-separated, newest first, to rotate.
+                             # Unset: a per-process secret, so sessions end on restart
+ADMIN_API_KEYS=...           # optional; "name:key" operator keys (X-Admin-Key) that read
+                             # every run and approve paused ones; the name is recorded
 ALLOWED_ORIGIN=http://localhost:5173
 # Optional — response/feedback store; defaults to a local SQLite file (feedback.db)
 DATABASE_URL=postgresql://user:pass@host:5432/db

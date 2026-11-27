@@ -30,6 +30,7 @@ from agent.durable import (
     start_durable_run,
 )
 from agent.events import ApprovalRequested, ApprovalResolved
+from agent.session_tokens import is_valid_session_id, mint_session_id
 from agent.llm import ModelDelta, ModelTurn, ToolCallRequest
 from agent.loop import AgentConfig
 from agent.sessions import SessionPatchStore
@@ -191,6 +192,7 @@ class TestHelpersAndSnapshots:
             approved=True,
             comment="lgtm",
             timed_out=False,
+            approver="alice",
         )
         for ev in (req, res):
             et, payload = event_to_record(ev)
@@ -485,7 +487,9 @@ class TestHumanApprovalFlow:
             assert paused_run["status"] == "waiting_approval"
 
             # Deliver human approval -> workflow resumes and runs run_patch.
-            await approve_run(run_id, approved=True, comment="approved by reviewer")
+            await approve_run(
+                run_id, approved=True, approver="reviewer-1", comment="approved by reviewer"
+            )
             result = await handle.get_result()
             return result
 
@@ -504,6 +508,7 @@ class TestHumanApprovalFlow:
         resolved = next(ev for ev in stored["events"] if ev["event_type"] == "approval_resolved")
         assert resolved["payload"]["approved"] is True
         assert resolved["payload"]["comment"] == "approved by reviewer"
+        assert resolved["payload"]["approver"] == "reviewer-1"
 
     def test_denied_approval_skips_tool_and_completes_gracefully(self, dbos_env):
         run_store, _ = dbos_env
@@ -542,7 +547,9 @@ class TestHumanApprovalFlow:
             )
             pending = await get_pending_approval(run_id, timeout_seconds=5.0)
             assert pending is not None and pending["tool_name"] == "run_patch"
-            await approve_run(run_id, approved=False, comment="skip sandbox")
+            await approve_run(
+                run_id, approved=False, approver="reviewer-2", comment="skip sandbox"
+            )
             return await handle.get_result()
 
         result = asyncio.run(scenario())
@@ -555,6 +562,7 @@ class TestHumanApprovalFlow:
         resolved = next(ev for ev in stored["events"] if ev["event_type"] == "approval_resolved")
         assert resolved["payload"]["approved"] is False
         assert resolved["payload"]["comment"] == "skip sandbox"
+        assert resolved["payload"]["approver"] == "reviewer-2"
 
     def test_approval_timeout_skips_tool_and_records_timeout(self, dbos_env):
         run_store, _ = dbos_env
@@ -597,14 +605,19 @@ class TestHumanApprovalFlow:
         resolved = next(ev for ev in stored["events"] if ev["event_type"] == "approval_resolved")
         assert resolved["payload"]["approved"] is False
         assert resolved["payload"]["timed_out"] is True
+        assert resolved["payload"]["approver"] == ""
 
 
 class TestDurableHttpEndpoints:
-    def test_start_durable_run_and_approve_via_api(self, tmp_path, monkeypatch):
+    """TASK-5.30: the request cannot choose its tool policy, and only an operator approves."""
+
+    @pytest.fixture
+    def api(self, tmp_path, monkeypatch):
         destroy_dbos()
         reset_runtime()
         monkeypatch.setenv("ALLOWED_ORIGIN", "http://localhost")
         monkeypatch.setenv("CHAT_API_KEYS", API_KEY)
+        monkeypatch.setenv("ADMIN_API_KEYS", "alice:ops-key")
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'api_runs.db'}")
         monkeypatch.setenv("DBOS_SYSTEM_DATABASE_URL", f"sqlite:///{tmp_path / 'api_dbos.db'}")
 
@@ -615,109 +628,139 @@ class TestDurableHttpEndpoints:
         main = importlib.import_module("main")
 
         tool_log: list[str] = []
+        seen_interfaces: list[str] = []
         turns = [
             {"tool_calls": [{"id": "c1", "name": "run_patch", "input": {"name": "bell"}}]},
             {"text": "Approved via HTTP API."},
         ]
         client = IndexedScriptedClient(turns)
 
+        def tools_factory(ws, iface, pol, approved):
+            seen_interfaces.append(iface)
+            return ToolRegistry([
+                CountingTool(
+                    "run_patch",
+                    ToolOutcome(
+                        content='{"ran_cleanly": true}',
+                        summary="ran bell: clean",
+                        data={"name": "bell", "ran_cleanly": True},
+                    ),
+                    tool_log,
+                ),
+            ])
+
         try:
             set_runtime(
                 DurableRuntime(
                     client_factory=lambda: client,
-                    tools_factory=lambda ws, iface, pol, approved: ToolRegistry([
-                        CountingTool(
-                            "run_patch",
-                            ToolOutcome(
-                                content='{"ran_cleanly": true}',
-                                summary="ran bell: clean",
-                                data={"name": "bell", "ran_cleanly": True},
-                            ),
-                            tool_log,
-                        ),
-                    ]),
+                    tools_factory=tools_factory,
                     config_factory=lambda iface, pol, approved: AgentConfig(max_turns=5),
                     run_store=main.run_store,
                     classify_fn=lambda q, h: IN_SCOPE,
                 )
             )
             launch_dbos(f"sqlite:///{tmp_path / 'api_dbos.db'}", app_name="pd-api-test")
-
             with TestClient(main.app) as http:
-                start_resp = http.post(
-                    "/runs/durable",
-                    json={
-                        "message": "Run my bell patch",
-                        "session_id": "sess-api-1",
-                        "interface": "slack",
-                    },
-                    headers={"X-API-Key": API_KEY},
-                )
-                assert start_resp.status_code == 202
-                run_id = start_resp.json()["run_id"]
-                assert start_resp.json()["session_id"] == "sess-api-1"
-
-                # Poll GET /runs/{run_id} until waiting_approval.
-                deadline = time.monotonic() + 5.0
-                run_body = None
-                while time.monotonic() < deadline:
-                    r = http.get(f"/runs/{run_id}", headers={"X-API-Key": API_KEY})
-                    assert r.status_code == 200
-                    run_body = r.json()
-                    if run_body["status"] == "waiting_approval":
-                        break
-                    time.sleep(0.05)
-                assert run_body is not None and run_body["status"] == "waiting_approval"
-                assert run_body["pending_approval"]["tool_name"] == "run_patch"
-                assert tool_log == []
-
-                # Approve via HTTP endpoint.
-                approve_resp = http.post(
-                    f"/runs/{run_id}/approve",
-                    json={"approved": True, "comment": "go ahead"},
-                    headers={"X-API-Key": API_KEY},
-                )
-                assert approve_resp.status_code == 200
-                assert approve_resp.json()["approved"] is True
-
-                # Poll until completed.
-                deadline = time.monotonic() + 5.0
-                while time.monotonic() < deadline:
-                    r = http.get(f"/runs/{run_id}", headers={"X-API-Key": API_KEY})
-                    run_body = r.json()
-                    if run_body["status"] == "completed":
-                        break
-                    time.sleep(0.05)
-
-                assert run_body["status"] == "completed"
-                assert run_body["answer"] == "Approved via HTTP API."
-                assert tool_log == ["run_patch"]
-                ev_types = [e["event_type"] for e in run_body["events"]]
-                assert "approval_requested" in ev_types
-                assert "approval_resolved" in ev_types
-                assert ev_types[-1] == "done"
-
-                # Unknown run returns 404; bad API key returns 403.
-                assert (
-                    http.post(
-                        "/runs/missing/approve",
-                        json={"approved": True},
-                        headers={"X-API-Key": API_KEY},
-                    ).status_code
-                    == 404
-                )
-                assert (
-                    http.post(
-                        "/runs/durable",
-                        json={"message": "hi"},
-                        headers={"X-API-Key": "wrong"},
-                    ).status_code
-                    == 403
+                yield types.SimpleNamespace(
+                    http=http, main=main, tool_log=tool_log, interfaces=seen_interfaces
                 )
         finally:
             destroy_dbos()
             reset_runtime()
             sys.modules.pop("main", None)
+
+    @staticmethod
+    def _wait_for(http, run_id, status, headers):
+        deadline = time.monotonic() + 5.0
+        body = None
+        while time.monotonic() < deadline:
+            r = http.get(f"/runs/{run_id}", headers=headers)
+            if r.status_code == 404:  # the workflow has not stored the run yet
+                time.sleep(0.05)
+                continue
+            assert r.status_code == 200
+            body = r.json()
+            if body["status"] == status:
+                return body
+            time.sleep(0.05)
+        raise AssertionError(f"run never reached {status}: {body and body['status']}")
+
+    @pytest.mark.parametrize("forged", [
+        {"interface": "slack"},
+        {"interface": "eval"},
+        {"approved_tools": ["run_patch"]},
+        {"pause_for_approval": False},
+    ], ids=["interface-slack", "interface-eval", "approved-tools", "pause-flag"])
+    def test_a_request_cannot_choose_its_tool_policy(self, api, forged):
+        resp = api.http.post(
+            "/runs/durable",
+            json={"message": "Run my bell patch", **forged},
+            headers={"X-API-Key": API_KEY},
+        )
+        assert resp.status_code == 422
+        assert api.main.run_store.list_runs() == []
+
+    def test_an_http_run_always_uses_the_web_interface(self, api):
+        start = api.http.post(
+            "/runs/durable", json={"message": "Run my bell patch"},
+            headers={"X-API-Key": API_KEY},
+        )
+        assert start.status_code == 202
+        session_id = start.json()["session_id"]
+        assert is_valid_session_id(session_id)
+        body = self._wait_for(
+            api.http, start.json()["run_id"], "completed",
+            {"X-API-Key": API_KEY, "X-Admin-Key": "ops-key"},
+        )
+        assert body["interface"] == "web"
+        assert set(api.interfaces) == {"web"}
+
+    def test_only_an_operator_can_approve_and_the_decision_names_them(self, api):
+        async def start():
+            return await start_durable_run(
+                "Run my bell patch", interface="slack", session_id=mint_session_id()
+            )
+
+        # On the app's own event loop, as an in-process adapter (Slack) would.
+        run_id, session_id, _ = api.http.portal.call(start)
+        ops = {"X-API-Key": API_KEY, "X-Admin-Key": "ops-key"}
+        paused = self._wait_for(api.http, run_id, "waiting_approval", ops)
+        assert paused["pending_approval"]["tool_name"] == "run_patch"
+
+        url = f"/runs/{run_id}/approve"
+        decision = {"approved": True, "comment": "go ahead"}
+        for headers, params in [
+            ({"X-API-Key": API_KEY}, {}),                                    # browser key only
+            ({"X-API-Key": API_KEY}, {"session_id": session_id}),            # the requester
+            ({"X-API-Key": API_KEY, "X-Admin-Key": "guess"}, {}),             # wrong operator key
+        ]:
+            r = api.http.post(url, json=decision, headers=headers, params=params)
+            assert r.status_code == 403
+        assert api.tool_log == []
+        assert self._wait_for(api.http, run_id, "waiting_approval", ops)
+
+        approved = api.http.post(url, json=decision, headers=ops)
+        assert approved.status_code == 200
+        assert approved.json()["approver"] == "alice"
+
+        done = self._wait_for(api.http, run_id, "completed", ops)
+        assert done["answer"] == "Approved via HTTP API."
+        assert api.tool_log == ["run_patch"]
+        resolved = next(e for e in done["events"] if e["event_type"] == "approval_resolved")
+        assert resolved["payload"]["approver"] == "alice"
+        assert resolved["payload"]["comment"] == "go ahead"
+
+        # Unknown run returns 404 to an operator; bad API key returns 403.
+        assert api.http.post(
+            "/runs/missing/approve", json={"approved": True}, headers=ops
+        ).status_code == 404
+        assert api.http.post(
+            "/runs/durable", json={"message": "hi"}, headers={"X-API-Key": "wrong"}
+        ).status_code == 403
+
+    def test_approve_run_refuses_a_decision_without_an_approver(self):
+        with pytest.raises(ValueError):
+            asyncio.run(approve_run("any-run", approved=True, approver="  "))
 
 
 class TestSessionPatchWorkspace:

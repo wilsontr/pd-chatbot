@@ -24,7 +24,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException, Query, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Literal, Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -46,6 +46,7 @@ from agent.durable import (
 from agent.events import Artifact, Done, Sources, TextDelta, TextReset, ToolCall, ToolResult
 from agent.observability import flush as flush_tracing
 from agent.patches import append_patches
+from agent.session_tokens import is_valid_session_id, mint_session_id
 from agent.sessions import SessionPatchStore
 from agent.store import RunStore
 from feedback_store import FeedbackStore, UnknownMessageError
@@ -105,6 +106,51 @@ api_key_header = APIKeyHeader(name="X-API-Key")
 def require_api_key(key: str = Security(api_key_header)):
     if key not in CHAT_API_KEYS:
         raise HTTPException(status_code=403, detail="Invalid API key")
+
+
+# --- Operator access (TASK-5.29, TASK-5.30) ---
+# CHAT_API_KEYS ship in the browser bundle, so they cannot tell one user from
+# another. Operator keys are for server-side tools only: CORS does not allow the
+# header, so a page cannot send it. They unlock every run, not just a session's,
+# and only they can approve a paused run. Each entry is ``name:key`` (a bare key
+# is named "operator"); the name is recorded with every approval it makes.
+def _parse_admin_keys(raw: str) -> dict[str, str]:
+    keys: dict[str, str] = {}
+    for entry in (e.strip() for e in raw.split(",")):
+        if not entry:
+            continue
+        name, sep, key = entry.partition(":")
+        name, key = (name.strip(), key.strip()) if sep else ("operator", entry)
+        if key:
+            keys[key] = name or "operator"
+    return keys
+
+
+ADMIN_API_KEYS: dict[str, str] = _parse_admin_keys(os.environ.get("ADMIN_API_KEYS", ""))
+
+
+def _admin_name(request: Request) -> Optional[str]:
+    """The operator behind ``X-Admin-Key``, or None."""
+    sent = request.headers.get("X-Admin-Key", "")
+    if not sent:
+        return None
+    for key, name in ADMIN_API_KEYS.items():
+        if hmac.compare_digest(sent, key):
+            return name
+    return None
+
+
+def _is_admin(request: Request) -> bool:
+    return _admin_name(request) is not None
+
+
+def _session_for(session_id: Optional[str]) -> str:
+    """The caller's session: a new one, or one this server issued to it."""
+    if session_id is None:
+        return mint_session_id()
+    if not is_valid_session_id(session_id):
+        raise HTTPException(status_code=403, detail="Unknown session")
+    return session_id
 
 
 def _verify_hmac(payload_signature: str, key: str) -> bool:
@@ -168,12 +214,16 @@ class FeedbackRequest(BaseModel):
 
 
 class DurableRunRequest(BaseModel):
+    """A durable run started over HTTP. It always runs under the web interface:
+    which tools need approval, and which are already approved, are decided by
+    server-side code, never by the request (TASK-5.30). Unknown fields are refused
+    rather than ignored, so a caller cannot believe it chose them."""
+
+    model_config = ConfigDict(extra="forbid")
+
     message: str = Field(min_length=1, max_length=2000)
     history: List[HistoryItem] = Field(default=[], max_length=20)
     session_id: Optional[str] = Field(default=None, max_length=128)
-    interface: Literal["web", "cli", "slack", "mcp", "eval"] = "web"
-    approved_tools: List[str] = Field(default=[])
-    pause_for_approval: bool = True
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -190,6 +240,7 @@ def _sse(event: dict) -> str:
 @limiter.limit("10/minute")
 async def chat_endpoint(request: Request, req: ChatRequest):
     history_dicts = [h.model_dump() for h in req.history]
+    session_id = _session_for(req.session_id)
 
     async def generate():
         # Capture the response as it streams so it can be stored with its own id
@@ -203,7 +254,7 @@ async def chat_endpoint(request: Request, req: ChatRequest):
             req.message,
             history_dicts,
             interface="web",
-            session_id=req.session_id,
+            session_id=session_id,
             run_store=run_store,
             patch_store=patch_store,
         ):
@@ -300,7 +351,8 @@ _PD_FILENAME_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def _check_session_id(session_id: str) -> None:
-    if not session_id or len(session_id) > 128:
+    """404 for any id this server did not issue, so ids cannot be guessed or reused."""
+    if not is_valid_session_id(session_id):
         raise HTTPException(status_code=404, detail="Unknown session")
 
 
@@ -337,6 +389,12 @@ async def session_patch_pd_endpoint(request: Request, session_id: str, patch_id:
     )
 
 
+def _owns(run: dict, session_id: Optional[str]) -> bool:
+    return is_valid_session_id(session_id) and hmac.compare_digest(
+        str(run.get("session_id") or ""), session_id or ""
+    )
+
+
 @app.get("/runs", dependencies=[Depends(require_api_key)])
 @limiter.limit("60/minute")
 async def list_runs_endpoint(
@@ -345,11 +403,18 @@ async def list_runs_endpoint(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
-    """List recent agent runs, optionally filtered by session id."""
+    """List a session's recent runs; an operator may list every session's."""
+    if not _is_admin(request) and not is_valid_session_id(session_id):
+        raise HTTPException(status_code=403, detail="Unknown session")
     items = await asyncio.to_thread(
         run_store.list_runs, session_id=session_id, limit=limit, offset=offset
     )
     return {"runs": items}
+
+
+#: The only interface an HTTP caller gets. Slack and other adapters start their
+#: runs in-process with ``start_durable_run`` and their own interface.
+HTTP_DURABLE_INTERFACE = "web"
 
 
 @app.post("/runs/durable", status_code=202, dependencies=[Depends(require_api_key)])
@@ -361,10 +426,8 @@ async def start_durable_run_endpoint(request: Request, req: DurableRunRequest):
     run_id, session_id, _handle = await start_durable_run(
         req.message,
         history_dicts,
-        session_id=req.session_id,
-        interface=req.interface,
-        approved_tools=req.approved_tools,
-        pause_for_approval=req.pause_for_approval,
+        session_id=_session_for(req.session_id),
+        interface=HTTP_DURABLE_INTERFACE,
     )
     return {"run_id": run_id, "session_id": session_id, "status": "running"}
 
@@ -374,21 +437,37 @@ async def start_durable_run_endpoint(request: Request, req: DurableRunRequest):
 async def approve_run_endpoint(
     request: Request, run_id: str, req: ApprovalDecisionRequest
 ):
-    """Approve or deny a durable run paused on an approval-gated tool call."""
+    """Approve or deny a durable run paused on an approval-gated tool call.
+
+    Only an operator (``X-Admin-Key``) may decide, and their name is recorded with
+    the decision. The run's own session cannot approve it: the gate exists to put a
+    person other than the requester between a run and the tools that cost money.
+    """
+    approver = _admin_name(request)
+    if approver is None:
+        raise HTTPException(status_code=403, detail="Approving a run needs an operator key")
     _ensure_dbos()
     run = await asyncio.to_thread(run_store.get_run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Unknown run")
-    await approve_run(run_id, approved=req.approved, comment=req.comment)
-    return {"status": "ok", "run_id": run_id, "approved": req.approved}
+    await approve_run(run_id, approved=req.approved, approver=approver, comment=req.comment)
+    return {
+        "status": "ok", "run_id": run_id, "approved": req.approved, "approver": approver,
+    }
 
 
 @app.get("/runs/{run_id}", dependencies=[Depends(require_api_key)])
 @limiter.limit("60/minute")
-async def get_run_endpoint(request: Request, run_id: str):
-    """Return a stored agent run's metadata, Langfuse trace link and full event history."""
+async def get_run_endpoint(
+    request: Request, run_id: str, session_id: Optional[str] = None
+):
+    """Return a stored agent run's metadata, Langfuse trace link and full event history.
+
+    Only to the session the run belongs to (``session_id``), or to an operator.
+    Any other caller gets the same 404 as for a run that does not exist.
+    """
     run = await asyncio.to_thread(run_store.get_run, run_id)
-    if run is None:
+    if run is None or not (_is_admin(request) or _owns(run, session_id)):
         raise HTTPException(status_code=404, detail="Unknown run")
     if run.get("status") == "waiting_approval" and is_dbos_launched():
         try:
