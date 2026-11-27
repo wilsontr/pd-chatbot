@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 690" width="1240" height="690" role="img" aria-labelledby="arch-title arch-desc">
+<title id="arch-title">pd-chatbot architecture: interfaces, agent core, tools and backends</title>
+<desc id="arch-desc">The web UI, CLI and MCP server are thin adapters over one typed event stream emitted by agent/loop.py. agent/chat.py handles the cache, scope gate, guardrails and storage; agent/guardrails.py wraps every tool call. Tools search the documentation, load skills, and write, run and analyse Pd patches against ChromaDB, the skills directory, Postgres and the Pd sandbox.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#59636e"/>
+</marker>
+</defs>
+<rect width="1240" height="690" fill="#ffffff"/>
+<text x="40" y="40" font-size="11" font-weight="700" letter-spacing="1.6" fill="#59636e" font-family="ui-sans-serif,system-ui,-apple-system,sans-serif">INTERFACES — THIN ADAPTERS OVER ONE EVENT STREAM</text>
+<rect x="40" y="56" width="265" height="64" rx="7" fill="#ddf4ff" stroke="#54aeff" stroke-width="1.4"/>
+<text x="172" y="84" font-size="13" font-weight="700" fill="#0a3069" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">Web UI → main.py</text>
+<text x="172" y="102" font-size="13" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">events → SSE</text>
+<rect x="325" y="56" width="245" height="64" rx="7" fill="#ddf4ff" stroke="#54aeff" stroke-width="1.4"/>
+<text x="448" y="84" font-size="13" font-weight="700" fill="#0a3069" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">pdbot CLI</text>
+<text x="448" y="102" font-size="13" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">events → terminal</text>
+<rect x="590" y="56" width="270" height="64" rx="7" fill="#ddf4ff" stroke="#54aeff" stroke-width="1.4"/>
+<text x="725" y="84" font-size="13" font-weight="700" fill="#0a3069" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">MCP server</text>
+<text x="725" y="102" font-size="13" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">agent/mcp_server.py</text>
+<rect x="880" y="56" width="320" height="64" rx="7" fill="#ddf4ff" stroke="#54aeff" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="1040" y="84" font-size="13" font-weight="700" fill="#0a3069" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">Slack</text>
+<text x="1040" y="102" font-size="13" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">planned (TASK-5.18)</text>
+<text x="40" y="172" font-size="11" font-weight="700" letter-spacing="1.6" fill="#59636e" font-family="ui-sans-serif,system-ui,-apple-system,sans-serif">AGENT CORE</text>
+<rect x="40" y="190" width="570" height="74" rx="7" fill="#f6f8fa" stroke="#8c959f" stroke-width="1.4"/>
+<text x="325" y="224" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">agent/chat.py — request orchestration</text>
+<text x="325" y="242" font-size="13" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">cache · scope gate · guardrails · patch + run store</text>
+<rect x="40" y="300" width="570" height="96" rx="7" fill="#f6f8fa" stroke="#8c959f" stroke-width="1.4"/>
+<text x="325" y="336" font-size="12" font-weight="700" fill="#1f2328" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">agent/loop.py — the tool-use loop</text>
+<text x="325" y="353" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">streams text, runs tools, bounded turns and tokens</text>
+<text x="325" y="370" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">emits text_delta · tool_call · tool_result · artifact · done</text>
+<rect x="660" y="300" width="540" height="96" rx="7" fill="#f6f8fa" stroke="#8c959f" stroke-width="1.4"/>
+<text x="930" y="336" font-size="12" font-weight="700" fill="#1f2328" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">agent/guardrails.py — run_guarded_tool</text>
+<text x="930" y="353" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">one guard path for every interface: tool policy,</text>
+<text x="930" y="370" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">tool-output injection screen, per-run budgets</text>
+<path d="M 325 120 L 325 188" stroke="#59636e" stroke-width="1.6" marker-end="url(#arrow)"/>
+<path d="M 325 264 L 325 298" stroke="#59636e" stroke-width="1.6" marker-end="url(#arrow)"/>
+<path d="M 614 348 L 656 348" stroke="#59636e" stroke-width="1.6" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<text x="40" y="432" font-size="11" font-weight="700" letter-spacing="1.6" fill="#59636e" font-family="ui-sans-serif,system-ui,-apple-system,sans-serif">TOOLS</text>
+<rect x="40" y="450" width="178" height="64" rx="7" fill="#dafbe1" stroke="#4ac26b" stroke-width="1.4"/>
+<text x="129" y="478" font-size="12" font-weight="700" fill="#1a7f37" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">search_docs</text>
+<text x="129" y="496" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">hybrid docs search</text>
+<rect x="236" y="450" width="178" height="64" rx="7" fill="#dafbe1" stroke="#4ac26b" stroke-width="1.4"/>
+<text x="325" y="478" font-size="12" font-weight="700" fill="#1a7f37" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">load_skill</text>
+<text x="325" y="496" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">skills/ playbooks</text>
+<rect x="432" y="450" width="178" height="64" rx="7" fill="#dafbe1" stroke="#4ac26b" stroke-width="1.4"/>
+<text x="521" y="478" font-size="12" font-weight="700" fill="#1a7f37" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">list_patches</text>
+<text x="521" y="496" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">read_patch</text>
+<rect x="628" y="450" width="178" height="64" rx="7" fill="#dafbe1" stroke="#4ac26b" stroke-width="1.4"/>
+<text x="717" y="478" font-size="12" font-weight="700" fill="#1a7f37" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">write_patch</text>
+<text x="717" y="496" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">PdPatch → .pd</text>
+<rect x="824" y="450" width="178" height="64" rx="7" fill="#dafbe1" stroke="#4ac26b" stroke-width="1.4"/>
+<text x="913" y="478" font-size="12" font-weight="700" fill="#1a7f37" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">run_patch</text>
+<text x="913" y="496" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">headless Pd</text>
+<rect x="1020" y="450" width="178" height="64" rx="7" fill="#dafbe1" stroke="#4ac26b" stroke-width="1.4"/>
+<text x="1109" y="478" font-size="12" font-weight="700" fill="#1a7f37" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">analyze_audio</text>
+<text x="1109" y="496" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">level · pitch</text>
+<path d="M 325 396 L 325 448" stroke="#59636e" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="40" y="556" font-size="11" font-weight="700" letter-spacing="1.6" fill="#59636e" font-family="ui-sans-serif,system-ui,-apple-system,sans-serif">BACKENDS</text>
+<rect x="40" y="574" width="214" height="64" rx="7" fill="#fff8c5" stroke="#d4a72c" stroke-width="1.4"/>
+<text x="147" y="602" font-size="12" font-weight="700" fill="#7d4e00" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">ChromaDB + BM25</text>
+<text x="147" y="620" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">hybrid RRF retrieval</text>
+<rect x="276" y="574" width="214" height="64" rx="7" fill="#fff8c5" stroke="#d4a72c" stroke-width="1.4"/>
+<text x="383" y="602" font-size="12" font-weight="700" fill="#7d4e00" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">skills/ + activation</text>
+<text x="383" y="620" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">versioned, eval-gated</text>
+<rect x="512" y="574" width="214" height="64" rx="7" fill="#fff8c5" stroke="#d4a72c" stroke-width="1.4"/>
+<text x="619" y="602" font-size="12" font-weight="700" fill="#7d4e00" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">Postgres</text>
+<text x="619" y="620" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">patches, runs, feedback</text>
+<rect x="748" y="574" width="214" height="64" rx="7" fill="#fff8c5" stroke="#d4a72c" stroke-width="1.4"/>
+<text x="855" y="602" font-size="12" font-weight="700" fill="#7d4e00" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">Pd sandbox</text>
+<text x="855" y="620" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">Docker or Modal</text>
+<rect x="984" y="574" width="214" height="64" rx="7" fill="#fff8c5" stroke="#d4a72c" stroke-width="1.4"/>
+<text x="1091" y="602" font-size="12" font-weight="700" fill="#7d4e00" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">pricing · gates</text>
+<text x="1091" y="620" font-size="12" font-weight="400" fill="#59636e" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">cost + eval thresholds</text>
+<path d="M 325 514 L 325 572" stroke="#59636e" stroke-width="1.6" marker-end="url(#arrow)"/>
+</svg>

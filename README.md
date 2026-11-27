@@ -1,8 +1,32 @@
 # Pd Documentation Assistant
 
-A retrieval-augmented generation (RAG) chatbot for answering questions about [Pure Data](http://msp.ucsd.edu/Pd_documentation/) (Pd) — a visual programming language for audio and multimedia. The assistant draws on the official Pd documentation and a synthesis textbook to answer questions about objects, patching concepts, audio signal processing, and synthesis techniques.
+An evaluated **tool-use agent** for [Pure Data](http://msp.ucsd.edu/Pd_documentation/)
+(Pd), the visual programming language for audio. It searches the official Pd
+documentation, writes real patches, runs them in a headless Pd sandbox, listens
+to the rendered audio, and fixes what it hears before it answers.
 
-![Pd Documentation Assistant](assets/chatbot.png)
+![The self-correction loop: a patch breaks, Pd reports the error, the agent rewrites it, and the rendered audio plays](assets/self-correction.gif)
+
+*Recorded from a real run — `pdbot ask` with `PD_SANDBOX_BACKEND=docker`, not a
+hand-written transcript: the agent wrote a reverb patch, `[rev1~]` failed to
+create in vanilla Pd, it rebuilt the effect from a feedback delay line, and the
+audio at the bottom is the WAV that run produced.*
+
+Measured against the tuned RAG pipeline it replaced, on the same 30-question
+golden set, three trials per arm:
+
+| | Result |
+|---|---|
+| Answer quality | level with the pipeline — faithfulness **4.61** vs 4.63, relevance 4.86 vs 4.81, citation 4.48 vs 4.50 |
+| Retrieval | its own `search_docs` calls beat the pipeline's fixed search — recall@5 **76.1%** vs 75.0%, MRR 0.703 vs 0.696 |
+| Patches | running its own patches lifts spec-compliant output from **73% to 92%** |
+
+The loop does not buy answer quality; it buys the mechanism — re-searching,
+running tools, correcting itself. Where that pays off is measured, and where it
+still fails is written up in the [failure modes](docs/FAILURE_MODES.md).
+
+Numbers: [EVAL.md](docs/EVAL.md) · [PATCH_EVAL.md](docs/PATCH_EVAL.md) ·
+[FAILURE_MODES.md](docs/FAILURE_MODES.md)
 
 ## Sources
 
@@ -15,6 +39,16 @@ The corpus is built from three sources:
 | [The Theory and Techniques of Electronic Music](http://msp.ucsd.edu/techniques.htm) (Miller Puckette) | Synthesis technique implementation in Pd: FM, waveshaping, filters, delay networks, granular synthesis, and more |
 
 ## How It Works
+
+### Architecture
+
+![Architecture: web, CLI and MCP interfaces over one agent core, which drives seven tools against five backends](assets/architecture.svg)
+
+One hand-written loop behind three interfaces and seven tools. The web UI, the
+`pdbot` CLI and the MCP server are thin adapters over the same typed event stream;
+the [MCP server](#mcp-server) skips the loop and serves the tools themselves. Every tool
+call goes through one guard path ([`agent/guardrails.py`](agent/guardrails.py)),
+whichever interface made it. A Slack adapter on the same stream is planned.
 
 ### Pipeline
 
@@ -41,23 +75,12 @@ by a fixed pipeline. The model decides whether to search the documentation, what
 to search for, and when it has enough to answer; the loop runs whatever tool calls
 come back and feeds the results into the next turn.
 
-```
-main.py (FastAPI + SSE adapter)
-      ↓  typed events
-agent/chat.py    request orchestration: cache, scope gate, guardrails, artifacts
-      ↓
-agent/loop.py    the tool-use loop: streams text, runs tools, bounded turns
-      ↓
-agent/tools/docs.py  search_docs  →  agent/retrieval.py (hybrid RRF + parent lookup)
-agent/tools/skills.py  load_skill  →  agent/skills/ (SKILL.md folders, re-read per turn)
-```
-
 The loop emits a typed event stream (`text_delta`, `tool_call`, `tool_result`,
 `sources`, `artifact`, `done`) and imports no web framework, so each interface is
 a thin adapter: the web endpoint maps those events to SSE, the
-[`pdbot` CLI](#cli-pdbot) streams them to the terminal, and a Slack adapter maps
-the same stream to its own transport. The [MCP server](#mcp-server) skips the
-loop and serves the tools themselves, behind the same guardrails. Tests drive
+[`pdbot` CLI](#cli-pdbot) streams them to the terminal, and the
+[MCP server](#mcp-server) serves the tools themselves. A Slack adapter over the
+same stream is planned. Tests drive
 the loop with a scripted model client, so they need no API key.
 
 `rag.py` still contains the original fixed pipeline (classify → retrieve once →
@@ -233,6 +256,9 @@ pd-patch count is canonicalised against the retrieved reference
 ([`agent/patch_counts.py`](agent/patch_counts.py)) — `inlets: 2` appeared in 3/3
 answers before, and 0 of 180 answers in the final 30-entry run contains a
 `[snapshot~]` count other than 1, with q_006 at 5/5 on five runs.
+
+Each of those is written up, with the measurement that found it and the check
+that now stops it recurring, in **[Failure modes the evals caught](docs/FAILURE_MODES.md)**.
 
 **Generation metrics**: faithfulness, answer relevance, and citation
 correctness scored by a Claude-as-judge rubric (LLM-as-judge). A sampled run
@@ -571,6 +597,8 @@ cd frontend && npm install && npm run dev
 ```
 
 The frontend proxies `/api` to `http://localhost:8000` (configured in `vite.config.ts`).
+
+![The chat interface: a streamed answer with Pd patch diagrams rendered as SVG](assets/chatbot.png)
 
 ### CLI (`pdbot`)
 
