@@ -8,8 +8,8 @@ Thresholds: faithfulness >= 4, relevance >= 4.5, citation_correctness >= 4, load
 
 | Skill | Version | Activated | Gate | Faithfulness | Relevance | Citation | Task success | Loaded |
 |---|---|---|---|---|---|---|---|---|
-| abstractions-and-dollar-zero | `599b049b2849` | `599b049b2849` | pass | 4.69 | 4.84 | 4.09 | 76% | 78% |
-| dsp-debugging | `3a9b2c0cd8c2` | `b10d1256e39a` | baseline (not measured) | — | — | — | — | — |
+| abstractions-and-dollar-zero | `599b049b2849` | `599b049b2849` | activated | 4.69 | 4.84 | 4.09 | 76% | 78% |
+| dsp-debugging | `f20906715fd7` | `b10d1256e39a` | fail | 3.89 | 5.00 | 3.78 | 49% | 80% |
 | granular-synthesis | `fc0f3280f4ac` | `41e503ae5451` | baseline (not measured) | — | — | — | — | — |
 | pd-flavors | `337f1d11b579` | `dfec472f9f1c` | activated | 5.00 | 4.50 | 4.50 | 60% | 100% |
 | wavetables | `42a363f92b14` | `0cf6f136b95d` | activated | 4.25 | 5.00 | 4.25 | 100% | 75% |
