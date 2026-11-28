@@ -9,13 +9,17 @@
     {
       "id": "flavor-002",
       "question": "What is the difference between Pd Vanilla and Pd-extended?",
-      "expects": ["2014"],
+      "expects": [
+        "2014"
+      ],
       "notes": "Uses the manual's 'Other flavors' section: Vanilla is the official distribution by Miller Puckette; Pd-extended was a flavor with a large external collection, discontinued in 2014; many tutorials assume it and need their libraries installed; the current flavors are listed on puredata.info."
     },
     {
       "id": "flavor-003",
       "question": "A tutorial I'm following uses [cyclone] objects. Will they work out of the box in Pd Vanilla?",
-      "expects": ["external"],
+      "expects": [
+        "external"
+      ],
       "notes": "Explains that library objects are externals, not part of Vanilla, and have to be installed/loaded (Externals chapter); suggests checking the object reference for the exact name; does not guarantee the library object behaves like a Vanilla object of a similar name."
     },
     {
@@ -27,6 +31,71 @@
       "id": "flavor-005",
       "question": "This patch works on my friend's machine but not mine — they use Purr Data and I'm on Pd Vanilla. Why?",
       "notes": "Treats the flavor/external difference as the first hypothesis: which objects are library externals, whether they are installed and declared, and GUI-only features. Should ask for the failing object or console error rather than guessing at a specific Purr Data difference."
+    },
+    {
+      "id": "flavor-006",
+      "question": "Is Pd-extended still maintained? A forum post told me to download it.",
+      "expects": [
+        "2014"
+      ],
+      "notes": "States from the manual that Pd-extended was discontinued in 2014, that tutorials based on it are outdated but can be followed by installing the needed libraries, and points to puredata.info for current flavors."
+    },
+    {
+      "id": "flavor-007",
+      "question": "Can I run Pd inside my DAW as a plugin?",
+      "expects": [
+        "plugdata"
+      ],
+      "notes": "Cites the manual's note that PlugData runs Pd as a plugin in a DAW; frames details beyond that (formats, hosts) as unverified and points to PlugData's own docs."
+    },
+    {
+      "id": "flavor-008",
+      "question": "Is [expr] part of Pd Vanilla or is it an external I need to install?",
+      "expects": [
+        "expr"
+      ],
+      "notes": "Checks the object reference: if the excerpts include an [expr] page, says it is documented in the Vanilla reference; avoids claiming installation steps not in the docs."
+    },
+    {
+      "id": "flavor-009",
+      "question": "What is Pd-L2Ork and how does it relate to Purr Data?",
+      "notes": "Presents Pd-L2Ork and Purr Data as forks of Pd, says the documentation covers Vanilla and does not describe their internals, and points to their own documentation; does not invent history or features."
+    },
+    {
+      "id": "flavor-010",
+      "question": "Where is the 'Preferences' menu in Purr Data? I can't find the audio settings.",
+      "notes": "Says the docs describe Vanilla's interface, cannot verify Purr Data's menus, gives the Vanilla location only as Vanilla, and points to Purr Data's documentation; does not invent menu items."
+    },
+    {
+      "id": "flavor-011",
+      "question": "A tutorial uses an object called [mtof~]. Is that built in?",
+      "notes": "Searches the object name; if the reference has a page it is documented Vanilla, otherwise says the reference does not cover it and it may be an external; does not guess."
+    },
+    {
+      "id": "flavor-012",
+      "question": "How do I install an external library like ELSE or zexy in Pd Vanilla?",
+      "expects": [
+        "external"
+      ],
+      "notes": "Uses the manual's Externals chapter (Deken / Find externals, declare/paths as documented) and avoids inventing commands; notes library objects are not guaranteed to behave like Vanilla objects."
+    },
+    {
+      "id": "flavor-013",
+      "question": "If I make a patch in PlugData, will it open in Pd Vanilla?",
+      "notes": "Says forks may introduce incompatibilities and lag behind Vanilla (manual), so it depends on the objects used: externals bundled by the fork must be installed in Vanilla; cannot verify PlugData specifics; suggests testing."
+    },
+    {
+      "id": "flavor-014",
+      "question": "Does the Pd manual you're using apply to Purr Data as well?",
+      "notes": "Quotes the manual's scope: it covers Pd Vanilla; for fully compatible forks it mostly applies; some forks are incompatible; points to the fork's own docs for differences."
+    },
+    {
+      "id": "flavor-015",
+      "question": "Why does a Pd-extended patch from 2012 show lots of objects that couldn't be created when I open it in Pd Vanilla?",
+      "expects": [
+        "external"
+      ],
+      "notes": "Explains Pd-extended bundled many externals that Vanilla does not ship; install the libraries the patch uses (Externals chapter) or replace the objects; flags any Vanilla equivalent as a suggestion."
     }
   ]
 }

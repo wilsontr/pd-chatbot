@@ -5,12 +5,13 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-27 21:20'
-updated_date: '2026-11-28 01:23'
+updated_date: '2026-11-28 01:44'
 labels:
   - agent
   - skills
   - eval
-dependencies: []
+dependencies:
+  - TASK-5.40
 references:
   - skills/activation.json
   - .github/workflows/skills.yml
@@ -50,4 +51,6 @@ Five of the six skills (abstractions-and-dollar-zero, dsp-debugging, granular-sy
 Steps 1-4 implemented and tested (tests/test_skill_activation.py TestCiEvidence/TestVerify/TestDeactivate, tests/test_ci_workflows.py::TestSkillsCheck). 'python -m evaluation.skills --verify' on the current manifest fails on all six pins: five baselines and wavetables (activated by local).
 Local preview of the five baseline slices (not activated, not evidence): abstractions-and-dollar-zero passes; dsp-debugging fails load rate 40% < 50%; granular-synthesis fails faithfulness 3.40 and citation 3.20 < 4; pd-flavors fails relevance 4.00 < 4.5; working-from-a-pd-file fails relevance 4.00 < 4.5. Slices are 4-5 questions, so a CI run may differ. Deactivating the failing skills changes what production serves, so that is left to the user.
 Known gap: a squash merge whose message includes the bot's '[skip ci]' line skips the push-to-main check.
+
+CI gate run 46093371333 (workflow_dispatch on main, db48672, all six skills): pd-flavors passed and was recorded with CI evidence (commit 4638af2). Failed: abstractions-and-dollar-zero (load 40%), dsp-debugging (faithfulness 3.80, citation 3.20), granular-synthesis (relevance 4.40), wavetables (faithfulness 3.00), working-from-a-pd-file (load 0%). Compared with the local preview, abstractions-and-dollar-zero and wavetables flipped pass->fail and pd-flavors fail->pass: on 4-5 question slices the gate decision is mostly noise. --verify on main now fails on the five remaining pins. AC1 and AC2 stay open pending the user's decision (deactivate, or enlarge the slices / run more trials first).
 <!-- SECTION:NOTES:END -->

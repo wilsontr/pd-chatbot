@@ -718,3 +718,38 @@ class TestDeactivate:
         _gated(tmp_path, monkeypatch)
         assert "deactivated" not in json.loads(manifest_path(tmp_path).read_text())
         assert skill_eval.verify_manifest(tmp_path) == ([], [])
+
+
+class TestPooledTrials:
+    """TASK-5.40: the gate reads every answer from every trial."""
+
+    def test_each_question_is_answered_once_per_trial_and_pooled(self, tmp_path, monkeypatch):
+        write_skill(tmp_path)
+        scores = iter([5, 5, 5, 3, 3, 3])  # trial 1 all 5s, trial 2 all 3s
+        loads = iter([True, True, True, False, False, True])
+
+        def judge(question, answer, chunks, usage_sink):
+            score = next(scores)
+            return {d: {"score": score, "explanation": ""} for d in SCORE_KEYS}
+
+        summary = skill_eval.run_skill_eval(
+            NAME, root=tmp_path, trials=2,
+            answer_fn=lambda q, h: fake_answer(loaded=next(loads)), judge_fn=judge,
+        )
+        assert summary["questions"] == 3 and summary["answers"] == 6 and summary["trials"] == 2
+        assert summary["judged"] == 6
+        assert summary["faithfulness_mean"] == 4.0
+        assert summary["faithfulness_by_trial"] == [5.0, 3.0]
+        assert summary["load_rate"] == round(4 / 6, 4)
+        assert [e["trial"] for e in summary["entries"]] == [1, 1, 1, 2, 2, 2]
+
+        _clear_ci(monkeypatch)
+        skill_eval.activate_result(summary, root=tmp_path, actor="tester")
+        metrics = load_manifest(tmp_path)[NAME].metrics
+        assert metrics["trials"] == 2 and metrics["answers"] == 6 and metrics["questions"] == 3
+
+    def test_trials_must_be_positive(self, tmp_path):
+        write_skill(tmp_path)
+        with pytest.raises(ValueError):
+            skill_eval.run_skill_eval(NAME, root=tmp_path, trials=0,
+                                      answer_fn=lambda q, h: fake_answer(), judge_fn=fake_judge())

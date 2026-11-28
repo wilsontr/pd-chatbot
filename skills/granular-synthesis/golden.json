@@ -4,7 +4,9 @@
     {
       "id": "gs-001",
       "question": "How do I build a granular sampler in Pd that plays short grains from a recorded sample?",
-      "expects": ["grain"],
+      "expects": [
+        "grain"
+      ],
       "notes": "Describes playing many short segments in rapid succession (the Sampling section), reads the sample from an array with tabread4~ or tabplay~, schedules the grains, and windows each one. Should distinguish the documented mechanism from the starting values it suggests."
     },
     {
@@ -25,8 +27,86 @@
     {
       "id": "gs-005",
       "question": "Can I use [tabplay~] instead of [tabread4~] for the grains?",
-      "expects": ["tabplay~"],
+      "expects": [
+        "tabplay~"
+      ],
       "notes": "Explains the trade-off from the object pages: tabplay~ plays a table segment without transposition and without interpolation artifacts, so it is cheaper; tabread4~ interpolates and is what changes pitch. A good answer names which one fits the user's goal."
+    },
+    {
+      "id": "gs-006",
+      "question": "How do I freeze a sound in Pd so a short moment keeps sustaining?",
+      "expects": [
+        "grain"
+      ],
+      "notes": "Frames freezing as granular playback with a fixed read position and overlapping windowed grains; grounds it in the Sampling / enveloping samplers sections; flags grain size and overlap numbers as suggestions."
+    },
+    {
+      "id": "gs-007",
+      "question": "How can I time-stretch a recording without changing its pitch in Pd?",
+      "notes": "Explains the looping-sampler / granular approach: scan the read position slowly while each grain plays at the original rate, so transposition and speed are decoupled; quotes the Sampling section rather than inventing formulas."
+    },
+    {
+      "id": "gs-008",
+      "question": "What window shape should I use for my grains, and how do I make one with [cos~]?",
+      "expects": [
+        "cos~"
+      ],
+      "notes": "Says the envelope must be zero at both ends (enveloping samplers), shows scaling a phase ramp into the positive half of [cos~] as the book does, and marks the specific shape choice as a suggestion rather than a documented standard."
+    },
+    {
+      "id": "gs-009",
+      "question": "How do I load a sound file into an array to use as the source for grains?",
+      "expects": [
+        "soundfiler"
+      ],
+      "notes": "Uses [soundfiler] to read into an [array define] (or graph) array, loaded before DSP starts; suggests a $0- prefixed name if the patch is instantiated more than once; cites the Arrays chapter."
+    },
+    {
+      "id": "gs-010",
+      "question": "How do I add random scatter to the position and pitch of each grain?",
+      "expects": [
+        "random"
+      ],
+      "notes": "Uses a control-rate scheduler ([metro] + [random]) to set each grain's start position and rate before firing its envelope, starting deterministic and adding scatter; keeps reads inside the array; ranges flagged as suggestions."
+    },
+    {
+      "id": "gs-011",
+      "question": "My granular patch makes a 'scratching' or Doppler sound when I move the position control. Why?",
+      "notes": "Explains that changing the read position while a grain plays changes its effective rate (the book's Doppler/scratch description); offers holding the pointer per grain with [samphold~] on the phase wrap as a fix."
+    },
+    {
+      "id": "gs-012",
+      "question": "My granular patch is silent. What should I check?",
+      "notes": "Checks the array was actually loaded (soundfiler path/return count), DSP on, the window/line~ not stuck at zero, the scheduler actually firing; suggests printing the array or the read index; no invented causes."
+    },
+    {
+      "id": "gs-013",
+      "question": "How many simultaneous grain voices can I run in Pd before CPU becomes a problem, and how do I organise them?",
+      "expects": [
+        "clone"
+      ],
+      "notes": "Says the docs do not give a voice limit; suggests a modest voice count with [clone] or a single signal-rate scheduler, and measuring; flags numbers as suggestions."
+    },
+    {
+      "id": "gs-014",
+      "question": "What is granular synthesis, in terms of how Pd's documentation describes it?",
+      "expects": [
+        "grain"
+      ],
+      "notes": "Paraphrases the Sampling section's definition (many small segments of a sample in rapid succession) and relates grain duration, overlap and read position to the result, citing the book."
+    },
+    {
+      "id": "gs-015",
+      "question": "How do I stop my grain read index from going past the end of the array?",
+      "notes": "Says to clamp or wrap the index explicitly (e.g. [clip~] or wrapping the position) based on the array size, because array indices run 0 to N-1; does not rely on out-of-range behaviour."
+    },
+    {
+      "id": "gs-016",
+      "question": "Should my grains be scheduled with [metro] or with [phasor~]?",
+      "expects": [
+        "phasor~"
+      ],
+      "notes": "Contrasts control-rate scheduling (metro starts each grain with a line~ envelope) with signal-rate streams (phasor~ sweeping read position and window together, as in the book's figures), with the trade-offs; no claim that one is the documented standard."
     }
   ]
 }

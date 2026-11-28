@@ -94,3 +94,9 @@ class TestEvalReports:
         full = next(s for s in steps(wf) if "--all" in s.get("run", ""))
         assert "steps.report.outputs.path" in full["run"]
         assert "docs/EVAL.md" not in full["run"]
+
+
+def test_the_skill_gate_pools_three_trials():
+    """TASK-5.40: one trial of a small slice is mostly judge noise."""
+    gate = next(s for s in steps(load("skills.yml")) if "evaluation.skills" in s.get("run", ""))
+    assert "--trials 3" in gate["run"] and "--gate --activate" in gate["run"]

@@ -34,9 +34,13 @@ from typing import Any
 
 from . import GOLDEN_FILENAME, Skill, SkillError
 
-#: Small on purpose: this is a smoke slice per skill, not the full eval set.
+#: Bounds on what the reader accepts. A shipped skill needs at least
+#: GATED_QUESTIONS (TASK-5.40): one answer's judge score moves by about a point
+#: between runs, so the gate needs 15 questions x 3 trials before its means
+#: settle within ~0.15 of the margins it tests. The cap keeps a slice a slice.
 MIN_QUESTIONS = 3
-MAX_QUESTIONS = 12
+GATED_QUESTIONS = 15
+MAX_QUESTIONS = 25
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,7 @@ def read_golden_set(skill: Skill) -> GoldenSet | None:
 
 __all__ = [
     "GOLDEN_FILENAME",
+    "GATED_QUESTIONS",
     "MAX_QUESTIONS",
     "MIN_QUESTIONS",
     "GoldenQuestion",

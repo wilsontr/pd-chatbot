@@ -34,6 +34,85 @@
         "phasor~"
       ],
       "notes": "Scales the 0-1 ramp from phasor~ by the table length before tabread4~, cites the tabread4~ and phasor~ pages and the book's wavetable-lookup section, and flags any guard-point offset as the answer's own detail if the excerpts do not state it."
+    },
+    {
+      "id": "wt-005",
+      "question": "How do I make a wavetable with a sawtooth-like shape that sinesum can't make?",
+      "expects": [
+        "until"
+      ],
+      "notes": "Fills the table with a counter loop ([until] driven by the count, [f]x[+ 1], [t f f] into [tabwrite]) as the skill's computed-shape route; notes that each wiring mistake gives a clean but silent run; flags the loop as a construction."
+    },
+    {
+      "id": "wt-006",
+      "question": "My [tabosc4~] patch runs but is completely silent. What's the most likely problem?",
+      "notes": "Says a clean but silent run usually means the table was never filled; check the fill on its own by reading back a value with [tabread] → [print] before changing the playback chain."
+    },
+    {
+      "id": "wt-007",
+      "question": "Can I change the waveform with a new sinesum message while [tabosc4~] is playing?",
+      "expects": [
+        "sinesum"
+      ],
+      "notes": "Cites the tabosc4~ page warning against sending new sinesum messages while the table is playing; suggests switching between two tables or accepting the risk as a suggestion."
+    },
+    {
+      "id": "wt-008",
+      "question": "What's the difference between sinesum and cosinesum for filling a table?",
+      "expects": [
+        "cosinesum"
+      ],
+      "notes": "Explains both are array methods documented with tabosc4~ that write partials (sine vs cosine phase) and the guard points; does not invent arguments beyond the excerpt."
+    },
+    {
+      "id": "wt-009",
+      "question": "How do I control the pitch of [tabosc4~] with a MIDI note number?",
+      "expects": [
+        "mtof"
+      ],
+      "notes": "Converts with [mtof] to Hz and sends the frequency into tabosc4~'s left inlet (smoothed with [line~]/[sig~] if desired); the creation argument is the table name, not the pitch."
+    },
+    {
+      "id": "wt-010",
+      "question": "Why does my message box [sinesum 512 1( connected to nothing not do anything?",
+      "expects": [
+        ";"
+      ],
+      "notes": "Explains the message needs to reach the table: either a leading ';' and the table name so it is sent to that receiver, or a wire into the table; an unconnected message box without ';' goes nowhere."
+    },
+    {
+      "id": "wt-011",
+      "question": "How do I draw my own waveform by hand and play it as an oscillator?",
+      "expects": [
+        "tabosc4~"
+      ],
+      "notes": "Uses an array in a graph that can be edited with the mouse, sized as a power of two plus three guard points for tabosc4~ (or read with phasor~ + tabread4~ scaled to the size); warns the guard points must be kept consistent."
+    },
+    {
+      "id": "wt-012",
+      "question": "Should I use [tabosc4~] or [phasor~] into [tabread4~] for a wavetable oscillator?",
+      "notes": "Compares: tabosc4~ is the documented wavetable oscillator needing power-of-two + 3 points; phasor~ → *~ N → tabread4~ gives control over the index (with the +1 offset for a sinesum table); marks the choice as a suggestion."
+    },
+    {
+      "id": "wt-013",
+      "question": "How do I fill a table with one cycle of a sine without using sinesum?",
+      "expects": [
+        "tabwrite"
+      ],
+      "notes": "Shows the counter loop writing sin(2*pi*i/N) with [expr] into [tabwrite] at index i, with [t f f] ordering the index before the value; table of N points read with phasor~ scaled by N."
+    },
+    {
+      "id": "wt-014",
+      "question": "My wavetable oscillator sounds one octave too high. What did I get wrong with [phasor~] and [tabread4~]?",
+      "notes": "Checks the scaling: phasor~ frequency is the pitch and the ramp must be scaled by the table length N (one cycle per ramp); a table holding two cycles or a wrong multiplier doubles the pitch; suggests reading back values."
+    },
+    {
+      "id": "wt-015",
+      "question": "How do I check that my wavetable actually contains a sine wave after the patch loads?",
+      "expects": [
+        "print"
+      ],
+      "notes": "Reads back a value after load ([loadbang] → [delay] → index → [tabread] → [print]): a quarter-cycle index should print about 1, and 0 means the fill never ran; then remove the check."
     }
   ]
 }

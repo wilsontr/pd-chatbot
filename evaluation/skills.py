@@ -181,8 +181,17 @@ def run_skill_eval(
     answer_fn: AnswerFn | None = None,
     judge_fn: JudgeFn | None = None,
     verbose: bool = False,
+    trials: int = 1,
 ) -> dict[str, Any]:
-    """Answer and score one skill's golden slice; return its result dict."""
+    """Answer and score one skill's golden slice; return its result dict.
+
+    With ``trials`` > 1 every question is answered that many times and the gate
+    reads the pooled answers (TASK-5.40): one judged answer's score moves by
+    about a point between runs, so a 15-question slice needs three trials for its
+    means to settle within ~0.15.
+    """
+    if trials < 1:
+        raise ValueError("trials must be at least 1")
     from .generation import _is_task_success  # shares the generation eval's pass rule
     from . import claims
 
@@ -200,10 +209,12 @@ def run_skill_eval(
     judge_usage: dict[str, dict[str, int]] = {}
 
     entries: list[dict[str, Any]] = []
-    for question in golden.questions:
+    runs = [(trial, q) for trial in range(1, trials + 1) for q in golden.questions]
+    for trial, question in runs:
         entry: dict[str, Any] = {
             "id": question.id,
             "question": question.question,
+            "trial": trial,
         }
         started = time.perf_counter()
         try:
@@ -273,18 +284,36 @@ def run_skill_eval(
         entry["cost_usd"] = round(cost, 6) if cost is not None else None
         if verbose:
             verdict = "success" if entry["task_success"] else entry["status"]
-            print(f"  {question.id}: {verdict} (loaded={loaded}, {latency_ms:.0f} ms)")
+            tag = f" t{trial}" if trials > 1 else ""
+            print(f"  {question.id}{tag}: {verdict} (loaded={loaded}, {latency_ms:.0f} ms)")
         entries.append(entry)
 
     summary = _summarise(skill, entries, judge_usage, model, judge_model)
+    summary["trials"] = trials
+    summary["questions"] = len(golden.questions)
+    summary["answers"] = len(entries)
+    if trials > 1:
+        summary["faithfulness_by_trial"] = [
+            _mean_score([e for e in entries if e.get("trial") == t], "faithfulness")
+            for t in range(1, trials + 1)
+        ]
     if verbose:
         print(
             f"{skill.name} v{skill.version}: judged {summary['judged']}/"
-            f"{summary['questions']}, faithfulness {summary['faithfulness_mean']}, "
+            f"{summary['answers']} ({summary['questions']} questions x {trials}), faithfulness {summary['faithfulness_mean']}, "
             f"relevance {summary['relevance_mean']}, load rate "
             f"{summary['load_rate']:.0%}"
         )
     return summary
+
+
+def _mean_score(entries: list[dict[str, Any]], dimension: str) -> float | None:
+    scores = [
+        (entry.get("scores", {}).get(dimension) or {}).get("score")
+        for entry in entries if entry.get("judged")
+    ]
+    scores = [score for score in scores if isinstance(score, (int, float))]
+    return round(sum(scores) / len(scores), 2) if scores else None
 
 
 def _summarise(
@@ -394,6 +423,8 @@ def _metrics_record(result: Mapping[str, Any]) -> dict[str, Any]:
         key: result[key]
         for key in (
             "questions",
+            "trials",
+            "answers",
             "judged",
             "task_success_rate",
             "load_rate",
@@ -711,18 +742,22 @@ def summary_markdown(
         "",
         f"Thresholds: {format_skill_thresholds(thresholds)}.",
         "",
-        "| Skill | Version | Judged | Faithfulness | Relevance | Loaded | Verdict |",
+        "| Skill | Version | Judged (answers = questions x trials) | Faithfulness "
+        "| Relevance | Loaded | Verdict |",
         "|---|---|---|---|---|---|---|",
     ]
     for result in results:
         name = str(result["skill"])
         lines.append(
-            "| {name} | `{version}` | {judged}/{questions} | {faith} | {relevance} "
+            "| {name} | `{version}` | {judged}/{answers} ({questions} x {trials}) "
+            "| {faith} | {relevance} "
             "| {loaded} | {verdict} |".format(
                 name=name,
                 version=result["version"],
                 judged=result.get("judged", 0),
                 questions=result.get("questions", 0),
+                answers=result.get("answers", result.get("questions", 0)),
+                trials=result.get("trials", 1),
                 faith=_cell(result.get("faithfulness_mean")),
                 relevance=_cell(result.get("relevance_mean")),
                 loaded=_percent(result.get("load_rate")),
@@ -812,6 +847,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Stop serving a skill and record --reason in the manifest")
     parser.add_argument("--reason", type=str, default="",
                         help="Why the skill is deactivated (required with --deactivate)")
+    parser.add_argument("--trials", type=int, default=1,
+                        help="Answer each question this many times and gate on the pooled "
+                             "answers (CI uses 3; TASK-5.40)")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
@@ -884,6 +922,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             judge_model=args.judge,
             verbose=not args.quiet,
+            trials=args.trials,
         )
         failures, activated = gate_and_activate(
             result,

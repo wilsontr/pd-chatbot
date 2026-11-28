@@ -16,9 +16,10 @@ name: Skill eval gate
 # Each activation made here records this run (metrics.ci in the manifest).
 # skills-check.yml fails main when a pin has no such evidence (TASK-5.37).
 #
-# Cost: one agent run plus three judge calls per golden question. The slices are
-# 3-12 questions, so a typical single-skill change costs a few cents; only
-# changed skills run.
+# Cost: one agent run plus three judge calls per answer, about $0.013 measured
+# (run 46093371333). Each slice is 15+ questions answered 3 times and pooled
+# (TASK-5.40), so ~45 answers and ~$0.60 per changed skill; a manual run of all
+# six skills is ~$3.60. Only changed skills run on a pull request.
 
 on:
   pull_request:
@@ -44,7 +45,8 @@ concurrency:
 jobs:
   skill-eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # ~45 answers per skill; all six skills at once take the longest.
+    timeout-minutes: 60
     # Needed to commit the activation and snapshot back to the PR branch.
     permissions:
       contents: write
@@ -113,6 +115,7 @@ jobs:
           fi
           python -m evaluation.skills \
             "${selection[@]}" \
+            --trials 3 \
             --gate --activate \
             --report docs/SKILLS.md \
             --output skills_eval.json \

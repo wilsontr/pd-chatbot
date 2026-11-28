@@ -143,6 +143,17 @@ skill is not served at all); run the workflow from the Actions tab to publish
 it. A manual run commits its activations to the branch it ran on, `main`
 included, and keeps the skills that passed even when another one failed.
 
+**Slice size (TASK-5.40).** Each skill ships at least 15 golden questions, and
+the gate answers each one 3 times and scores the pooled answers. The sizes come
+from the first CI gate run and a local run on the same versions: one judged
+answer's score has a standard deviation of about 1.0 (the same question scored
+2 in one run and 5 in the next), and whether the skill was loaded flipped per
+question between runs. The error on a mean over *n* answers is then about
+1/√n: ±0.45 with the old 5 questions x 1 trial, which is wider than the gate's
+margins and flipped three of six decisions between the two runs, and ±0.15
+with 15 x 3. Each answer costs about $0.013 including the three judge calls, so
+a skill costs about $0.60 to gate. `--trials` defaults to 1 for local checks.
+
 **Evidence (TASK-5.37).** An activation made in CI records the run under
 `metrics.ci` (run id and URL, workflow, commit). An activation made on a laptop
 or a `--baseline` pin carries none, and

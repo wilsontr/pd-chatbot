@@ -21,6 +21,7 @@ from agent.skills import (
     SkillRegistry,
 )
 from agent.skills.golden import (
+    GATED_QUESTIONS,
     MAX_QUESTIONS,
     MIN_QUESTIONS,
     read_golden_set,
@@ -179,6 +180,8 @@ class TestShippedSkills:
             golden = read_golden_set(skill)
             assert golden is not None, f"{skill.name} has no {GOLDEN_FILENAME}"
             assert MIN_QUESTIONS <= len(golden) <= MAX_QUESTIONS
+            # TASK-5.40: fewer and the gate decision is mostly judge noise.
+            assert len(golden) >= GATED_QUESTIONS, f"{skill.name}: {len(golden)} questions"
 
     def test_golden_question_ids_are_unique_across_skills(self, registry):
         ids: list[str] = []

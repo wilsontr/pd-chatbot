@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-27 21:20'
-updated_date: '2026-11-28 01:23'
+updated_date: '2026-11-28 01:38'
 labels:
   - agent
   - ci
@@ -47,6 +47,8 @@ eval.yml never builds the pd-sandbox image, so every test marked `needs_sandbox`
 <!-- SECTION:NOTES:BEGIN -->
 Added tests/needs_sandbox.py: one decorator that marks a test 'sandbox' and applies the image skip (bypassed by PD_SANDBOX_REQUIRED). test_sandbox, test_patch_tools, test_patch_eval and test_wavetables use it; the marker is registered in pyproject.toml. sandbox.yml now installs requirements, builds the image and runs 'python -m pytest -m sandbox' with PD_SANDBOX_REQUIRED=1 on PRs and pushes touching agent/**, sandbox/**, skills/**, the patch eval, pd_schema.py, the four test files or requirements.txt (timeout 30 min, ~70 tests each starting a container).
 Validation: 'pytest -m sandbox' collects 70 tests across the four files; run locally with the image: 67 passed, 3 failed + 1 teardown error from Docker Desktop wall-clock timeouts under a 12-minute run (p_05, p_13, test_parallel_runs), all three pass when rerun alone. With PD_SANDBOX_IMAGE pointing at a missing image: 6/6 wavetable sandbox tests fail with PD_SANDBOX_REQUIRED=1 and skip without it. tests/test_ci_workflows.py pins the trigger paths, -m sandbox, PD_SANDBOX_REQUIRED and that no test file keeps its own image check. The workflow has not run on GitHub yet.
+
+First GitHub run failed at collection: pytest -m sandbox imports every test module and some open the Chroma index. Fixed in ac71524 by building the index in sandbox.yml; run 46093908942 on main: 70 passed in 26 s.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

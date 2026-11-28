@@ -4,7 +4,9 @@
     {
       "id": "dsp-001",
       "question": "My Pd patch went silent after I moved it into a [block~ 1024] subpatch. What should I check?",
-      "expects": ["block~"],
+      "expects": [
+        "block~"
+      ],
       "notes": "Works through the documented causes: one block~/switch~ per window, reblocking by power-of-two factors through inlet~/outlet~, FFT channel count following the block size, a switch that is off, and DSP/audio settings. Should not blame the model's memory of a 'known bug'."
     },
     {
@@ -15,7 +17,9 @@
     {
       "id": "dsp-003",
       "question": "How do the overlap and up/downsampling arguments of [block~] interact with [inlet~] and [outlet~]?",
-      "expects": ["block~"],
+      "expects": [
+        "block~"
+      ],
       "notes": "States the documented rules: block size, overlap and resampling are set for a window and its subwindows; inlet~/outlet~ do the reblocking and only by power-of-two factors; without inlet~/outlet~ other sizes are possible. Should not invent limits that are not in the excerpts."
     },
     {
@@ -27,6 +31,83 @@
       "id": "dsp-005",
       "question": "A feedback patch sounds one block late. What explains that, and how do I get sample-by-sample feedback?",
       "notes": "Explains block delay and the documented option of setting the block size to 1 for 1-sample feedback, plus the ordering rules for throw~/catch~ and delay lines. Should point at the Switching and blocking section and the book's order-of-execution examples."
+    },
+    {
+      "id": "dsp-006",
+      "question": "My patch crackles whenever I move a slider that controls the volume. How do I fix it?",
+      "expects": [
+        "line~"
+      ],
+      "notes": "Identifies stepwise control changes to a signal multiplier as the cause and smooths them with [line~] (or a ramp into the multiplier); notes the line~ right-inlet ramp time is not remembered; flags chosen ramp times as suggestions."
+    },
+    {
+      "id": "dsp-007",
+      "question": "Nothing comes out of my speakers at all from a simple [osc~ 440] → [dac~] patch. Where do I start?",
+      "expects": [
+        "dsp"
+      ],
+      "notes": "Starts with whether DSP is switched on, the [dac~] connections and the audio settings/device, then the console for errors; does not jump to advanced causes first."
+    },
+    {
+      "id": "dsp-008",
+      "question": "I added a [switch~] to a subpatch to save CPU and now its output is missing even though the switch should be on. What could be wrong?",
+      "expects": [
+        "switch~"
+      ],
+      "notes": "Explains a switched-off window outputs zeros, including when a parent window is switched off, and that only one block~/switch~ is allowed per window; suggests checking the message that turns it on."
+    },
+    {
+      "id": "dsp-009",
+      "question": "My FFT patch gives garbage after I changed [block~ 512] to [block~ 500]. Why?",
+      "expects": [
+        "block~"
+      ],
+      "notes": "Explains FFT objects use the block size as the number of channels and reblocking must be by powers of two; 500 is not a power of two; cites Switching and blocking and the block~ page."
+    },
+    {
+      "id": "dsp-010",
+      "question": "My [throw~]/[catch~] bus has an extra block of delay. Can I get rid of it?",
+      "expects": [
+        "throw~"
+      ],
+      "notes": "Cites the throw~ page: the throw~ must be sorted before its catch~, otherwise there is at least a block of delay; explains how to arrange the order (e.g. subpatch placement); does not promise zero delay beyond what the docs say."
+    },
+    {
+      "id": "dsp-011",
+      "question": "The sum of several oscillators in my patch sounds distorted. How do I check whether it's clipping?",
+      "expects": [
+        "clip"
+      ],
+      "notes": "Explains summed signals can exceed the -1..1 range, measures with [env~] (RMS in dB, full scale 100 dB) or inspects peaks, and scales the sum down; flags chosen gains as suggestions."
+    },
+    {
+      "id": "dsp-012",
+      "question": "How can I look at the actual sample values coming out of an object to debug it?",
+      "expects": [
+        "print~"
+      ],
+      "notes": "Recommends [print~] triggered by a bang to print one block of samples (and [bang~] per-block timing); describes what to look for; cites the object pages."
+    },
+    {
+      "id": "dsp-013",
+      "question": "My patch's CPU goes way up when a reverb tail fades out to near silence. Is that a Pd bug?",
+      "notes": "Says denormals are not covered by the Pd docs, labels the explanation as general floating-point DSP practice, and offers measures as suggestions without inventing a Pd object or default."
+    },
+    {
+      "id": "dsp-014",
+      "question": "When I start playback, my sample drops out for a moment the first time. What's going on?",
+      "expects": [
+        "array"
+      ],
+      "notes": "Points to the Arrays chapter: allocate and load arrays (soundfiler) before DSP starts; loading during playback can cause dropouts; suggests loading on patch open."
+    },
+    {
+      "id": "dsp-015",
+      "question": "Why does sending a bare number to the right inlet of [line~] make my sound click instead of ramp?",
+      "expects": [
+        "line~"
+      ],
+      "notes": "Explains that line~'s right inlet (ramp time) is not remembered, so a bare float jumps; send a target-time pair (list or message) each time; cites the line~ page."
     }
   ]
 }

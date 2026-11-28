@@ -20,6 +20,73 @@
       "id": "pd-file-004",
       "question": "I attached my synth.pd — can you add a filter to it?",
       "notes": "Says plainly that this assistant has no tool that reads an uploaded file, and asks for the patch text (or the relevant objects/connections) before acting. Should not pretend to have opened the file or invent its contents."
+    },
+    {
+      "id": "pd-file-005",
+      "question": "Can you explain this patch? #N canvas 0 0 450 300 12; #X obj 30 30 loadbang; #X msg 30 60 440; #X obj 30 90 osc~; #X obj 30 120 *~ 0.1; #X obj 30 150 dac~; #X connect 0 0 1 0; #X connect 1 0 2 0; #X connect 2 0 3 0; #X connect 3 0 4 0; #X connect 3 0 4 1;",
+      "notes": "Restates the boxes and the path: loadbang sends 440 to osc~, scaled by 0.1 to both dac~ channels; reads connect records as box-order indexes; no invented objects."
+    },
+    {
+      "id": "pd-file-006",
+      "question": "In my .pd file what does the line '#X connect 2 0 4 1;' mean?",
+      "notes": "Explains a connect record links outlet 0 of the third box (0-based box order) to inlet 1 of the fifth box; the numbers are box order, not ids."
+    },
+    {
+      "id": "pd-file-007",
+      "question": "My patch file has a line '#X msg 20 40 1 \\, 0 500;'. Why is there a backslash?",
+      "notes": "Explains that commas, semicolons and backslashes in box text are escaped in the file, so the message is '1, 0 500' (two messages); the backslash is not part of the message."
+    },
+    {
+      "id": "pd-file-008",
+      "question": "Here's my patch: #N canvas 0 0 400 300 12; #X obj 20 20 noise~; #X obj 20 60 dac~; #X connect 0 0 1 0; — can you make it quieter and add a low-pass filter?",
+      "expects": [
+        "lop~"
+      ],
+      "notes": "Rebuilds the path with write_patch keeping noise~ and dac~, inserting a [lop~] and a gain stage; says the original file is unchanged and lists what was added; flags chosen cutoff and gain as suggestions."
+    },
+    {
+      "id": "pd-file-009",
+      "question": "There's a '#X text 20 200 this is the filter;' line in my patch. Which object is that?",
+      "notes": "Says #X text is a comment, not an object: it has no inlets or outlets and no wire can connect to it; does not treat it as part of the signal path."
+    },
+    {
+      "id": "pd-file-010",
+      "question": "My file contains '#N canvas 0 0 300 200 sub 0;' and later '#X restore 50 50 pd sub;'. What is that part?",
+      "expects": [
+        "subpatch"
+      ],
+      "notes": "Explains this is a saved one-off subpatch named sub: its boxes appear between the canvas header and the restore line, and connections inside it do not connect to the parent."
+    },
+    {
+      "id": "pd-file-011",
+      "question": "My patch file has '#X obj 50 50 tabread4~ $0-buf;'. What does that box do, and how do I find which array it reads?",
+      "expects": [
+        "$0"
+      ],
+      "notes": "Reads the record as an object box running tabread4~ with argument $0-buf; explains $0 expands per patch so the array is the one named $0-buf in the same patch (look for an #X array or [array define] with that name); cites the tabread4~ page and Dollar signs."
+    },
+    {
+      "id": "pd-file-012",
+      "question": "Here's part of my patch: #X obj 10 10 cyclone/counter 0 7; #X obj 10 40 print; #X connect 0 0 1 0; — why does Pd say it can't create the first object?",
+      "expects": [
+        "external"
+      ],
+      "notes": "Identifies cyclone/counter as an external from the cyclone library that must be installed/loaded; says the documentation may not cover it and does not invent its inlets/outlets."
+    },
+    {
+      "id": "pd-file-013",
+      "question": "I pasted a 60-object patch earlier. Can you just show me the part where the envelope is generated?",
+      "notes": "Rebuilds only the envelope path (within the 15-object diagram limit) and lists what was omitted, keeping the user's object arguments exactly; asks for the relevant lines if they are not in the conversation."
+    },
+    {
+      "id": "pd-file-014",
+      "question": "What does '#X floatatom 20 20 5 0 0 0 - - -;' tell me about the number in that box?",
+      "notes": "Explains a floatatom record describes a number box (width and options) and that its current value is not saved in the file; does not guess the meaning of each field beyond what the docs or skill state."
+    },
+    {
+      "id": "pd-file-015",
+      "question": "Here's my patch: #N canvas 0 0 450 300 12; #X obj 20 20 phasor~ 2; #X obj 20 60 *~ 100; #X obj 20 100 +~ 200; #X obj 20 140 osc~; #X obj 20 180 dac~; #X connect 0 0 1 0; #X connect 1 0 2 0; #X connect 2 0 3 0; #X connect 3 0 4 0; — the pitch sweeps upward and jumps back. Can you make it sweep up and down smoothly instead?",
+      "notes": "Reads the path (phasor~ ramp scaled to 200-300 Hz into osc~), explains the jump is the phasor~ wrap, and revises with a smooth periodic control (e.g. osc~-based LFO scaled and offset), keeping the user's ranges; verifies if run_patch is available."
     }
   ]
 }
