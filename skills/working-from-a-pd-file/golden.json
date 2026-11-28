@@ -13,8 +13,8 @@
     },
     {
       "id": "pd-file-003",
-      "question": "My .pd file has a subpatch with most of the logic inside. Can you rebuild the whole thing?",
-      "notes": "Explains that the diagram tool does not model subpatches, so the agent can rebuild the key path and must list what it omitted; asks for the subpatch's contents or a description rather than pretending it read them. Should not claim to have edited the user's file."
+      "question": "My patch keeps most of its logic in a subpatch: #N canvas 0 0 450 300 12; #N canvas 0 0 300 200 voice 0; #X obj 20 20 inlet; #X obj 20 60 mtof; #X obj 20 100 osc~; #X obj 20 140 outlet~; #X connect 0 0 1 0; #X connect 1 0 2 0; #X connect 2 0 3 0; #X restore 20 60 pd voice; #X msg 20 20 60; #X obj 20 100 dac~; #X connect 1 0 0 0; #X connect 0 0 2 0; — can you rebuild the whole thing as one patch?",
+      "notes": "Reads the subpatch voice (inlet → mtof → osc~ → outlet~) between its canvas line and #X restore, and the parent (message 60 → pd voice → dac~, using parent box order where the subpatch is box 0); flattens it into one patch because the diagram tool does not model subpatches, says so, and keeps the arguments exactly (mtof of 60 is middle C)."
     },
     {
       "id": "pd-file-004",
@@ -75,8 +75,11 @@
     },
     {
       "id": "pd-file-013",
-      "question": "I pasted a 60-object patch earlier. Can you just show me the part where the envelope is generated?",
-      "notes": "Rebuilds only the envelope path (within the 15-object diagram limit) and lists what was omitted, keeping the user's object arguments exactly; asks for the relevant lines if they are not in the conversation."
+      "question": "Here's my patch: #N canvas 0 0 500 400 12; #X obj 20 20 loadbang; #X obj 20 50 metro 500; #X msg 20 80 1 10 \\, 0 300 10; #X obj 20 110 line~; #X obj 150 20 osc~ 220; #X obj 150 140 *~; #X obj 150 170 *~ 0.2; #X obj 150 200 dac~; #X obj 300 20 noise~; #X obj 300 60 lop~ 800; #X connect 0 0 1 0; #X connect 1 0 2 0; #X connect 2 0 3 0; #X connect 3 0 5 1; #X connect 4 0 5 0; #X connect 5 0 6 0; #X connect 6 0 7 0; #X connect 6 0 7 1; #X connect 8 0 9 0; #X connect 9 0 5 0; — just show me the part that makes the envelope. What triggers it and how long does it last?",
+      "expects": [
+        "line~"
+      ],
+      "notes": "Isolates loadbang → metro 500 → the message '1 10, 0 300 10' (the \\, is an escaped comma: two messages) → line~ into the right inlet of the *~: rise to 1 in 10 ms, then fall to 0 over 300 ms starting 10 ms later, retriggered every 500 ms; cites the line~ page; leaves the oscillator, noise and output out of the rebuilt path and says so."
     },
     {
       "id": "pd-file-014",

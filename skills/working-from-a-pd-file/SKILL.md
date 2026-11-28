@@ -1,6 +1,6 @@
 ---
 name: working-from-a-pd-file
-description: Working from a Pd patch the user supplies — reading pasted .pd canvas text, rebuilding its key path with the patch tool, and revising it without losing their structure.
+description: Use before answering any message that contains Pd patch file text (lines such as #N canvas, #X obj, #X msg, #X connect) or that is about the user's own .pd file or existing patch — explaining what it does, reading one record, or changing it. Covers reading the canvas text, rebuilding the key path with the patch tool, and revising it without losing the user's structure.
 ---
 
 # Working from a `.pd` file the user supplies
