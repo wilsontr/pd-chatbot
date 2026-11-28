@@ -143,6 +143,11 @@ if __name__ == "__main__":
 
     log("Building chunks...")
     child_chunks, parent_chunks = build_all_chunks(msp_sections, iem_objects, book_sections)
+    # The file-format spec is stored in the repository, not parsed from HTML.
+    from parse_file_format import file_format_chunks, load_source
+    ff_parents, ff_children = file_format_chunks(load_source())
+    parent_chunks += ff_parents
+    child_chunks += ff_children
     log(f"  {len(child_chunks)} child chunks, {len(parent_chunks)} parent chunks")
 
     log("Writing child_chunks.json...")
@@ -157,3 +162,4 @@ if __name__ == "__main__":
     log(f"  MSP manual chunks: {sum(1 for c in child_chunks if c['source'] == 'msp_manual')}")
     log(f"  IEM object entries: {sum(1 for c in child_chunks if c['source'] == 'iem_reference')}")
     log(f"  Puckette book chunks: {sum(1 for c in child_chunks if c['source'] == 'puckette_book')}")
+    log(f"  File-format spec chunks: {sum(1 for c in child_chunks if c['source'] == 'pd_file_format')}")

@@ -1,7 +1,7 @@
 export interface Source {
   heading_path: string
   url: string
-  source: 'msp_manual' | 'iem_reference' | 'puckette_book'
+  source: 'msp_manual' | 'iem_reference' | 'puckette_book' | 'pd_file_format'
   content_type: 'conceptual' | 'object_reference'
   object_name: string | null
 }

@@ -329,6 +329,17 @@ def search_documents(
     )
 
 
+#: How each corpus source is named in the excerpt block the model cites from.
+#: The book used to fall through to "MSP Manual"; the file-format spec is
+#: unofficial and for Pd 0.37, which its label says (TASK-5.41).
+SOURCE_LABELS = {
+    "msp_manual": "MSP Manual",
+    "iem_reference": "IEM Object Reference",
+    "puckette_book": "Puckette, Theory and Technique of Electronic Music",
+    "pd_file_format": "Unofficial Pd 0.37 file format specification",
+}
+
+
 def format_excerpts(chunks: list[Chunk]) -> str:
     """Render parent chunks as the citable excerpt block the model reads."""
     parts = []
@@ -337,10 +348,8 @@ def format_excerpts(chunks: list[Chunk]) -> str:
         url = chunk.get("url", "")
         heading = chunk.get("heading_path", "")
         text = chunk.get("text", "")
-        if source == "iem_reference":
-            parts.append(f"[IEM Object Reference: {heading}]\n{text}\nSource: {url}")
-        else:
-            parts.append(f"[MSP Manual: {heading}]\n{text}\nSource: {url}")
+        label = SOURCE_LABELS.get(source, "MSP Manual")
+        parts.append(f"[{label}: {heading}]\n{text}\nSource: {url}")
     return "\n\n---\n\n".join(parts)
 
 

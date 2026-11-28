@@ -33,22 +33,26 @@ not connect to the parent.
 
 ## Citations
 
-The indexed documentation does **not** describe the `.pd` file format: no excerpt
-explains `#N canvas`, `#X connect`, `#X restore`, escaping or record fields. What
-the table above says comes from this playbook, and a skill is not a source.
+The Pd manual and object reference do not describe the `.pd` file format. The
+one source in the index that does is the **Unofficial Pd 0.37 file format
+specification** (a 2004 community document): `search_docs` for the record you
+are explaining (`#X connect`, `#X restore`, `#N canvas`, `#X floatatom`, …) and
+cite the excerpt it returns.
 
-- State file-format facts (what a record means, box-order numbering, escapes,
-  subpatch boundaries) **without a citation**, and say once that the Pd docs
-  you have do not cover the file format.
-- Cite an excerpt only for what it actually says about an **object's
-  behaviour** (`[line~]`, `[tabread4~]`, `$0`, an external) — search by
-  `object_names` for the objects in their patch and cite those pages.
+- Cite that specification for what a record and its fields mean, and say once
+  that it is unofficial and written for Pd 0.37, so a newer Pd may add records
+  or fields it does not list.
+- State only what the excerpt states. Where it is silent (escaping of `,` in
+  messages, records added after 0.37), say the specification does not cover it
+  and give the point as your reading, uncited.
+- Cite the manual or object reference for an **object's behaviour**
+  (`[line~]`, `[tabread4~]`, `$0`, an external): search by `object_names` for
+  the objects in their patch.
 - A saved subpatch (`#N canvas … name` … `#X restore … pd name;`) is a one-off
-  subpatch: for what that means, cite the manual's Subpatches section on
-  `[pd name]`, not the abstraction or graph-on-parent sections.
-- Never attach a manual section to a file-format claim because it is nearby or
-  vaguely related, and never cite a URL or example file that no excerpt
-  contains.
+  subpatch: the specification explains the records, and the manual's
+  Subpatches section on `[pd name]` explains what a subpatch is.
+- Never attach a section to a claim because it is nearby or vaguely related, and
+  never cite a URL or example file that no excerpt contains.
 
 ## Procedure
 

@@ -32,13 +32,14 @@ Numbers: [EVAL_BASELINE.md](docs/EVAL_BASELINE.md) (the multi-trial comparison) 
 
 ## Sources
 
-The corpus is built from three sources:
+The corpus is built from four sources:
 
 | Source | Content |
 |---|---|
 | [Pure Data Manual](http://msp.ucsd.edu/Pd_documentation/) (Miller Puckette / UCSD) | Conceptual documentation: patching, messages, signal processing, DSP theory |
 | [IEM Object Reference](https://pd.iem.sh/objects/) | Per-object documentation: inlets, outlets, arguments, and descriptions for all vanilla Pd objects |
 | [The Theory and Techniques of Electronic Music](http://msp.ucsd.edu/techniques.htm) (Miller Puckette) | Synthesis technique implementation in Pd: FM, waveshaping, filters, delay networks, granular synthesis, and more |
+| [Unofficial Pd v0.37 file format specification](https://puredata.info/docs/developer/PdFileFormat) (Asselbergs and Sietsma, 2004; GNU FDL 1.2) | The `.pd` patch file format: records, wiring, canvases and subpatches, arrays, number and message boxes. Unofficial and written for Pd 0.37; stored in [`sources/`](sources/README.md) and merged by `parse_file_format.py` |
 
 ## How It Works
 
@@ -623,6 +624,9 @@ python parse_book.py          # requires puckette_book/ local mirror
 
 # Chunk (optional — only if re-parsing above)
 python chunk.py
+
+# The file-format spec is stored in sources/ and merged without re-parsing
+python parse_file_format.py
 
 # Index — always required on first run or after re-chunking
 python embed_and_index.py     # makes ~20 Voyage AI API calls, writes chroma_db/
