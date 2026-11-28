@@ -286,15 +286,29 @@ def score_faithfulness(
     ``usage_sink`` collects the judge call's token usage so production can bill
     the guardrail to the request it was serving.
     """
-    context_str = "\n\n---\n\n".join(
-        f"[{c.get('heading_path', '')}]\n{c.get('text', '')}"
-        for c in context_chunks
-    )
+    context_str = judge_context(context_chunks)
     return _score_single(
         client, judge_model, FAITHFULNESS_PROMPT,
         context=context_str, question=question, answer=answer,
         usage_sink=usage_sink,
     )
+
+
+def judge_context(context_chunks: list[dict[str, Any]]) -> str:
+    """The excerpts as the judge sees them, each with the URL the answer cites.
+
+    Answers cite an excerpt by the ``Source:`` URL printed under it
+    (agent/retrieval.py format_excerpts). Without that URL here the judge could
+    not tell a real URL citation from an invented one and scored correct ones as
+    fabricated (TASK-5.47).
+    """
+    parts = []
+    for c in context_chunks:
+        part = f"[{c.get('heading_path', '')}]\n{c.get('text', '')}"
+        if c.get("url"):
+            part += f"\nSource: {c['url']}"
+        parts.append(part)
+    return "\n\n---\n\n".join(parts)
 
 
 def evaluate_generation(
@@ -321,10 +335,7 @@ def evaluate_generation(
     Returns:
         Dict with faithfulness, relevance, citation scores and explanations.
     """
-    context_str = "\n\n---\n\n".join(
-        f"[{c.get('heading_path', '')}]\n{c.get('text', '')}"
-        for c in context_chunks
-    )
+    context_str = judge_context(context_chunks)
 
     metrics = {}
     for name, prompt in [

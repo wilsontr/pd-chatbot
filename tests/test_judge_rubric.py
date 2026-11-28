@@ -149,3 +149,25 @@ class TestRunControls:
 
         assert not summary["passed"]
         assert len(summary["failures"]) == 2
+
+
+class TestJudgeSeesUrls:
+    """TASK-5.47: answers cite excerpts by URL, so the judge has to see them."""
+
+    def test_each_excerpt_carries_its_source_url(self):
+        from evaluation.judge import judge_context
+
+        text = judge_context([
+            {"heading_path": "dac~", "text": "audio output", "url": "https://pd.iem.sh/objects/dac~/"},
+            {"heading_path": "no url", "text": "t"},
+        ])
+        assert "[dac~]\naudio output\nSource: https://pd.iem.sh/objects/dac~/" in text
+        assert text.endswith("[no url]\nt")
+
+    def test_both_judge_paths_use_it(self):
+        import inspect
+
+        from evaluation import judge
+
+        for fn in (judge.score_faithfulness, judge.evaluate_generation):
+            assert "judge_context(" in inspect.getsource(fn)
