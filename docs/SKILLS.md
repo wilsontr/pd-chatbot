@@ -8,12 +8,12 @@ Thresholds: faithfulness >= 4, relevance >= 4.5, citation_correctness >= 4, load
 
 | Skill | Version | Activated | Gate | Faithfulness | Relevance | Citation | Task success | Loaded |
 |---|---|---|---|---|---|---|---|---|
-| abstractions-and-dollar-zero | `5433fba8eed4` | `5433fba8eed4` | fail | 5.00 | 5.00 | 5.00 | 100% | 40% |
-| dsp-debugging | `b10d1256e39a` | `b10d1256e39a` | fail | 3.80 | 5.00 | 3.20 | 20% | 60% |
-| granular-synthesis | `41e503ae5451` | `41e503ae5451` | fail | 4.40 | 4.40 | 4.60 | 60% | 60% |
-| pd-flavors | `dfec472f9f1c` | `dfec472f9f1c` | pass | 5.00 | 4.50 | 4.50 | 60% | 100% |
-| wavetables | `0cf6f136b95d` | `0cf6f136b95d` | fail | 3.00 | 5.00 | 4.75 | 25% | 75% |
-| working-from-a-pd-file | `2916d46307a2` | `2916d46307a2` | fail | 5.00 | 5.00 | 4.50 | 50% | 0% |
+| abstractions-and-dollar-zero | `c4129daebf7b` | `5433fba8eed4` | baseline (not measured) | — | — | — | — | — |
+| dsp-debugging | `3a9b2c0cd8c2` | `b10d1256e39a` | baseline (not measured) | — | — | — | — | — |
+| granular-synthesis | `fc0f3280f4ac` | `41e503ae5451` | baseline (not measured) | — | — | — | — | — |
+| pd-flavors | `337f1d11b579` | `dfec472f9f1c` | activated | 5.00 | 4.50 | 4.50 | 60% | 100% |
+| wavetables | `42a363f92b14` | `0cf6f136b95d` | activated | 4.25 | 5.00 | 4.25 | 100% | 75% |
+| working-from-a-pd-file | `e891cc2f61f6` | `e891cc2f61f6` | pass | 4.50 | 4.90 | 4.50 | 69% | 64% |
 
 Per-question results, including the judge's explanations and any claim checks, are in the run's JSON output (`--output`) and the CI job summary. The generation and retrieval eval report is in [EVAL.md](EVAL.md).
 
@@ -24,4 +24,4 @@ Per-question results, including the judge's explanations and any claim checks, a
 - `granular-synthesis` at `41e503ae5451` — activated 2026-11-26T00:15:28Z by baseline
 - `pd-flavors` at `dfec472f9f1c` — activated 2026-11-28T01:33:49Z by wilsontr ([CI run](https://github.com/wilsontr/pd-chatbot/actions/runs/46093371333))
 - `wavetables` at `0cf6f136b95d` — activated 2026-11-27T17:27:22Z by local
-- `working-from-a-pd-file` at `2916d46307a2` — activated 2026-11-26T00:15:28Z by baseline
+- `working-from-a-pd-file` at `e891cc2f61f6` — activated 2026-11-28T04:59:18Z by wilsontr ([CI run](https://github.com/wilsontr/pd-chatbot/actions/runs/46109474101))
