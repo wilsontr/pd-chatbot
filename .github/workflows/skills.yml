@@ -150,4 +150,18 @@ jobs:
             exit 0
           fi
           git commit -m 'ci: activate evaluated skill versions [skip ci]'
-          git push origin "HEAD:$TARGET"
+          # A gate run takes up to an hour; main often moves meanwhile (the eval
+          # bot publishes EVAL.md). Re-apply onto the branch tip and retry rather
+          # than losing activations that were paid for.
+          # Only the activation commit is applied, so a pull request's merge
+          # checkout never pushes main's commits onto the PR branch.
+          activation=$(git rev-parse HEAD)
+          for attempt in 1 2 3; do
+            git fetch -q origin "$TARGET"
+            git checkout -q --detach FETCH_HEAD
+            git cherry-pick -q "$activation"
+            if git push origin "HEAD:$TARGET"; then exit 0; fi
+            echo "push rejected (attempt $attempt)"
+          done
+          echo "::error::could not push the activation to $TARGET"
+          exit 1

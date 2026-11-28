@@ -100,3 +100,9 @@ def test_the_skill_gate_pools_three_trials():
     """TASK-5.40: one trial of a small slice is mostly judge noise."""
     gate = next(s for s in steps(load("skills.yml")) if "evaluation.skills" in s.get("run", ""))
     assert "--trials 3" in gate["run"] and "--gate --activate" in gate["run"]
+
+
+def test_the_skill_gate_rebases_before_pushing_its_activation():
+    """A gate run lasts long enough for main to move; a rejected push loses it."""
+    commit = next(s for s in steps(load("skills.yml")) if "git commit" in s.get("run", ""))
+    assert "git cherry-pick" in commit["run"] and "for attempt" in commit["run"]
