@@ -31,6 +31,25 @@ appears as `\,` — do not read the escape as part of the message. Subpatch
 contents are interleaved in the same file; an `#X connect` inside a subpatch does
 not connect to the parent.
 
+## Citations
+
+The indexed documentation does **not** describe the `.pd` file format: no excerpt
+explains `#N canvas`, `#X connect`, `#X restore`, escaping or record fields. What
+the table above says comes from this playbook, and a skill is not a source.
+
+- State file-format facts (what a record means, box-order numbering, escapes,
+  subpatch boundaries) **without a citation**, and say once that the Pd docs
+  you have do not cover the file format.
+- Cite an excerpt only for what it actually says about an **object's
+  behaviour** (`[line~]`, `[tabread4~]`, `$0`, an external) — search by
+  `object_names` for the objects in their patch and cite those pages.
+- A saved subpatch (`#N canvas … name` … `#X restore … pd name;`) is a one-off
+  subpatch: for what that means, cite the manual's Subpatches section on
+  `[pd name]`, not the abstraction or graph-on-parent sections.
+- Never attach a manual section to a file-format claim because it is nearby or
+  vaguely related, and never cite a URL or example file that no excerpt
+  contains.
+
 ## Procedure
 
 1. **Restate what you read.** List the objects (with their creation arguments),
