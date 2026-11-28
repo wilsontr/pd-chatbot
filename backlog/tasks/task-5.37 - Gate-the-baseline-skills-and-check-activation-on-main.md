@@ -5,13 +5,18 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-27 21:20'
-updated_date: '2026-11-28 02:46'
+updated_date: '2026-11-28 02:48'
 labels:
   - agent
   - skills
   - eval
 dependencies:
   - TASK-5.40
+  - TASK-5.41
+  - TASK-5.42
+  - TASK-5.43
+  - TASK-5.44
+  - TASK-5.45
 references:
   - skills/activation.json
   - .github/workflows/skills.yml
