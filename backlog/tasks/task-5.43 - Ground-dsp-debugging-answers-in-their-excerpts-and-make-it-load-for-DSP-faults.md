@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-28 02:48'
-updated_date: '2026-11-28 06:14'
+updated_date: '2026-11-28 07:23'
 labels:
   - agent
   - skills
@@ -42,4 +42,6 @@ Fails citation correctness (3.38, floor 4) and load rate (47%) in CI run 4609533
 <!-- SECTION:NOTES:BEGIN -->
 Local, 15 x 2: load rate old description 57%, new 77% (judged run 83%); false triggers 1/18 (wt-006, a silent tabosc4~ patch, which is a fair match for 'no sound'). Judged with the new skill: faithfulness 4.17, relevance 5.00, citation 3.70 (CI baseline 3.38).
 Measurement bug found: evaluation/judge.py builds the judge's context as '[heading]\ntext' without the chunk URL, so the judge cannot see that a cited URL came from a retrieved excerpt and marks it fabricated. Verified on dsp-007: every URL the answer cited (manual 2.1.1, 3.3.1, the dac~ page) was among the retrieved chunks, while an earlier judge of the same answer pattern called the dac~ page 'not in provided context'. This affects citation scores in the generation eval, the published baselines and every skill gate, so the fix is a decision for the user, not part of this task.
+
+CI gate 46118109732 with the fixed judge (TASK-5.47): load 80% (fixed), relevance 5.00, faithfulness 3.89, citation 3.78 -> fail. Faithfulness complaints are now about the skill's own claims stated without a retrieved excerpt: [print~]/[bang~] debugging (dsp-001, 007, 012), 'block size sets the FFT channel count' (dsp-009), throw~/catch~ ordering (dsp-001), and the denormal paragraph still read as fact (dsp-013 2/3/2). dsp-005 trial 1 also misstated vd~/delread4~. Next: make each anchor claim conditional on retrieving its excerpt, and put the denormal advice under an explicit 'not in the Pd docs' label.
 <!-- SECTION:NOTES:END -->
