@@ -105,7 +105,10 @@ cache lives in memory (`TTLCache`). Three layers to add:
   preferred externals).
 
 *Done in TASK-5.9 and TASK-5.11: the event-sourced run log and DBOS-durable
-runs. Done in TASK-5.12: session patches. Each patch is stored under
+runs. Since TASK-5.31 the durable runner is the same `AgentLoop` as the streaming
+path, with each model turn, tool call and event write run as a checkpointed DBOS
+step, so text handling, budgets and error/recovery accounting cannot drift
+between the two; the durable finish also runs the faithfulness guard. Done in TASK-5.12: session patches. Each patch is stored under
 `(session_id, name)` in the `session_patches` table with a stable short id and a
 revision, using the same database as the run log. A request seeds its
 `PatchWorkspace` from the session before the loop starts and saves the patches it

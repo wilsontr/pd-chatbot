@@ -19,6 +19,7 @@ import wave
 from dataclasses import dataclass
 
 from sandbox.errors import SandboxError
+from sandbox.slots import run_slot
 
 SAMPLE_RATE = 48_000
 CHANNELS = 2
@@ -43,9 +44,6 @@ _STATUSES = {
     "load_failed",      # Pd could not open the file as a patch
     "patch_exited",     # the patch quit Pd before the duration was up
 }
-
-_slots = threading.BoundedSemaphore(int(os.environ.get("PD_SANDBOX_CONCURRENCY", "2")))
-
 
 
 @dataclass(frozen=True)
@@ -249,10 +247,7 @@ def run_patch(
 
     max_frames = math.ceil(seconds * SAMPLE_RATE) + 1
     limit = _MAX_HEADER + MAX_CONSOLE_BYTES + max_frames * _FRAME_BYTES
-    if not _slots.acquire(timeout=MAX_WALL_SECONDS):
-        raise SandboxError("sandbox is busy")
-    try:
+    # PD_SANDBOX_CONCURRENCY runs at once across the deployment (sandbox/slots.py).
+    with run_slot(timeout=MAX_WALL_SECONDS):
         raw = _execute(data, seconds, wall_seconds, limit)
-    finally:
-        _slots.release()
     return _parse(raw, max_frames)

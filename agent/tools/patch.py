@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import replace
 from typing import Any, Callable, Mapping
 
 import newrelic.agent
@@ -139,6 +140,21 @@ class _PatchTool:
         return _failure(
             f"There is no patch with id or name {key!r}. Patches in this session: {known}."
         )
+
+    def _named(self, arguments: Mapping[str, Any], outcome: ToolOutcome) -> ToolOutcome:
+        """Give a failure the stored name of the patch it was about.
+
+        A call may name a patch by its id or its name; the name in the result is
+        what lets a later clean call of the same patch count as recovering from
+        this failure, however each call referred to it (TASK-5.32).
+        """
+        if outcome.ok or outcome.data.get("name"):
+            return outcome
+        key = str(arguments.get("id") or arguments.get("name") or "")
+        entry = self.workspace.find(key) if key else None
+        if entry is None:
+            return outcome
+        return replace(outcome, data={**outcome.data, "name": entry.name})
 
 
 def _failure(message: str, **data: Any) -> ToolOutcome:
@@ -283,6 +299,9 @@ class WritePatchTool(_PatchTool):
     )
 
     def run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
+        return self._named(arguments, self._run(arguments))
+
+    def _run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
         patch_id = str(arguments.get("id") or "")
         name = str(arguments.get("name") or "")
         existing: PatchEntry | None = None
@@ -394,6 +413,9 @@ class RunPatchTool(_PatchTool):
         self._runner = runner
 
     def run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
+        return self._named(arguments, self._run(arguments))
+
+    def _run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
         entry = self._entry(arguments)
         if isinstance(entry, ToolOutcome):
             return entry
@@ -468,6 +490,9 @@ class AnalyzeAudioTool(_PatchTool):
     )
 
     def run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
+        return self._named(arguments, self._run(arguments))
+
+    def _run(self, arguments: Mapping[str, Any]) -> ToolOutcome:
         entry = self._entry(arguments)
         if isinstance(entry, ToolOutcome):
             return entry

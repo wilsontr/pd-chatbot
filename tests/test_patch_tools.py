@@ -441,3 +441,73 @@ class TestInTheSandbox:
         out = RunPatchTool(workspace, run_patch).run({"name": "tone"})
         body = json.loads(out.content)
         assert not body["ran_cleanly"] and "fm~ 3" in body["console"]
+
+
+class TestRecoveryByIdOrName:
+    """TASK-5.32: a fix counts as a recovery however each call named the patch."""
+
+    BAD = "error: ... couldn't create\n"
+
+    @staticmethod
+    def _run(workspace, calls, consoles):
+        """Run ``run_patch`` calls through the loop; ``consoles`` feed the fake sandbox."""
+        pending = list(consoles)
+        turns = [
+            ModelTurn(
+                content=[{"type": "tool_use", "id": f"c{i}", "name": "run_patch", "input": args}],
+                text="",
+                tool_calls=(ToolCallRequest(f"c{i}", "run_patch", args),),
+                stop_reason="tool_use",
+            )
+            for i, args in enumerate(calls)
+        ] + [ModelTurn(content=[{"type": "text", "text": "Done."}], text="Done.")]
+
+        class Client:
+            async def stream_turn(self, request):
+                yield turns.pop(0)
+
+        loop = AgentLoop(
+            Client(),
+            ToolRegistry([RunPatchTool(workspace, lambda *a: result(pending.pop(0)))]),
+        )
+
+        async def drain():
+            async for _ in loop.stream("fix tone"):
+                pass
+
+        asyncio.run(drain())
+        return loop.state
+
+    @pytest.fixture
+    def stored(self, workspace):
+        written(workspace)
+        workspace.entries["tone"].patch_id = "p7k2"
+        return workspace
+
+    @pytest.mark.parametrize("first,second", [
+        ({"name": "tone"}, {"name": "tone"}),
+        ({"id": "p7k2"}, {"id": "p7k2"}),
+        ({"id": "p7k2"}, {"name": "tone"}),
+        ({"name": "tone"}, {"id": "p7k2"}),
+    ], ids=["name-name", "id-id", "id-name", "name-id"])
+    def test_an_unclean_run_then_a_clean_one(self, stored, first, second):
+        state = self._run(stored, [first, second], [self.BAD, ""])
+        assert (state.tool_errors, state.recovered_errors, state.unresolved_errors) == (1, 1, 0)
+
+    @pytest.mark.parametrize("first,second", [
+        ({"id": "p7k2", "seconds": 99}, {"name": "tone"}),
+        ({"name": "tone", "seconds": 99}, {"id": "p7k2"}),
+    ], ids=["id-name", "name-id"])
+    def test_a_rejected_call_then_a_clean_one(self, stored, first, second):
+        # The rejected call never reaches the sandbox, so only one console is used.
+        state = self._run(stored, [first, second], [""])
+        assert (state.tool_errors, state.recovered_errors, state.unresolved_errors) == (1, 1, 0)
+
+    def test_a_different_patch_does_not_resolve_it(self, stored):
+        written(stored, name="other")
+        state = self._run(stored, [{"id": "p7k2"}, {"name": "other"}], [self.BAD, ""])
+        assert (state.tool_errors, state.recovered_errors, state.unresolved_errors) == (1, 0, 1)
+
+    def test_a_failure_reports_the_stored_name(self, stored):
+        out = RunPatchTool(stored, lambda *a: result()).run({"id": "p7k2", "seconds": 99})
+        assert not out.ok and out.data["name"] == "tone"

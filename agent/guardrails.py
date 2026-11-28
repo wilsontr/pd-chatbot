@@ -24,17 +24,35 @@ from model_config import JUDGE_MODEL
 
 logger = logging.getLogger(__name__)
 
+# Each pattern is anchored on word boundaries and kept to one sentence, because
+# the same check screens documentation excerpts and a patch's ``[print]``
+# output, where a match blocks the whole tool result (TASK-5.33). The whole
+# indexed corpus is checked against these in tests/test_agent_guardrails.py.
 _INJECTION_PATTERNS = [
-    re.compile(r"ignore\s+(all\s+)?(previous|prior|above|the)\s+(instructions?|prompts?|rules?|directives?)", re.IGNORECASE),
-    re.compile(r"you\s+are\s+(now\s+|no\s+longer\s+)?(a\s+|an\s+)?(?!.*?\bhelpful\b).{0,20}(assistant|chatbot|helper|ai)", re.IGNORECASE),
-    re.compile(r"(override|disregard|forget)\s+(your\s+)?(instructions?|prompts?|rules?|system\s+prompt|guidelines?)", re.IGNORECASE),
-    re.compile(r"system\s+(prompt|message|instruction)", re.IGNORECASE),
+    re.compile(r"\bignore\s+(all\s+)?(previous|prior|above|the)\s+(instructions?|prompts?|rules?|directives?)\b", re.IGNORECASE),
+    # A role assignment ("you are a pirate chatbot", "you are now an unfiltered
+    # AI"), not any sentence that starts "you are" and later contains "ai".
+    re.compile(
+        r"\byou\s+are\s+(now\s+|no\s+longer\s+)?(a|an)\s+(?![^.\n]*\bhelpful\b)"
+        r"(\w+\s+){0,3}(assistant|chatbot|helper|ai)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(override|disregard|forget)\s+(your\s+)?(instructions?|prompts?|rules?|system\s+prompt|guidelines?)\b", re.IGNORECASE),
+    # "system prompt" is never Pd vocabulary; "system message" is ("the system
+    # message box"), so it counts only when addressed to the model or asked for.
+    re.compile(r"\bsystem\s+prompts?\b", re.IGNORECASE),
+    re.compile(r"\byour\s+system\s+(message|instructions?)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(show|reveal|print|repeat|tell|give|output|display)\b[^.\n]{0,20}"
+        r"\bsystem\s+(message|instructions?)\b(?!\s+(box|window|bus|queue|dialog)\b)",
+        re.IGNORECASE,
+    ),
     # Match the DAN jailbreak token case-sensitively with word boundaries so
     # ordinary words and names in the Pd manual (e.g. "Dan Wilcox") do not trip.
     re.compile(r"\bDAN\b"),
     re.compile(r"\b(jailbreak|roleplay|developer\s*mode)\b", re.IGNORECASE),
-    re.compile(r"from\s+now\s+on\s+you\s+(are|will|must|should)", re.IGNORECASE),
-    re.compile(r"(do\s+not|don't|never)\s+(follow|obey|use|reference)\s+(your\s+)?(instructions?|prompts?|rules?)", re.IGNORECASE),
+    re.compile(r"\bfrom\s+now\s+on\s+you\s+(are|will|must|should)\b", re.IGNORECASE),
+    re.compile(r"\b(do\s+not|don't|never)\s+(follow|obey|use|reference)\s+(your\s+)?(instructions?|prompts?|rules?)\b", re.IGNORECASE),
 ]
 
 

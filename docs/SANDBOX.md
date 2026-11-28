@@ -76,7 +76,7 @@ its file parser now reads model-written text).
 | Syscall denylist | A seccomp filter on the patch process | Blocks starting programs, mounts, ptrace, BPF, io_uring and other calls Pd never needs. |
 | Supervisor split | Child has no access to the real stdout; the parent is not dumpable | A patch cannot forge its result by printing. |
 | Cleanup | `--rm`, and `docker rm -f` on any host-side failure | No container outlives its run, even if the host process is killed. |
-| Concurrency | 2 runs at once (`PD_SANDBOX_CONCURRENCY`) | Bounds the total load per host process. |
+| Concurrency | 2 runs at once (`PD_SANDBOX_CONCURRENCY`), across the whole deployment when it has a Postgres database | Bounds the load, and the Modal spend, however many workers and replicas serve requests. See [Concurrency](#concurrency). |
 
 `tests/test_sandbox.py` checks these limits from inside a running container, as
 well as runaway patches. It is skipped when the image is not built;
@@ -94,6 +94,32 @@ well as runaway patches. It is skipped when the image is not built;
 - **Production cannot use Docker on Railway**, which has no Docker daemon. Use Modal there.
 - A patch can read the image's own files and its `/proc`. Neither holds secrets:
   no environment variables are passed in.
+
+
+## Concurrency
+
+`PD_SANDBOX_CONCURRENCY` caps how many patches run at once
+([`sandbox/slots.py`](../sandbox/slots.py)). Each run first takes a slot in its
+own process, so one process never goes past the cap. When `PD_SANDBOX_LOCK_URL`
+(or, if it is unset, `DATABASE_URL`) is a Postgres URL, the run also takes one of
+`PD_SANDBOX_CONCURRENCY` Postgres session advisory locks, keyed
+`(0x50645362, slot)`. Every worker process and replica that shares the database
+shares those locks, so the cap holds for the whole deployment and Modal spend
+does not grow with the number of workers. A lock belongs to its database
+connection, so a process killed mid-run frees its slot when Postgres drops the
+connection. A run that cannot get a slot within 60 seconds fails with "sandbox is
+busy", which the agent reports as the sandbox being unavailable.
+
+Without a Postgres URL (local work, SQLite), the cap is per process, so the total
+is the number of processes times the setting. If the lock database cannot be
+reached, runs go ahead under the per-process cap and a warning is logged, rather
+than every patch run failing during a database outage.
+
+Production runs one uvicorn worker on one Railway replica with `DATABASE_URL`
+set to its Postgres, so the cap is deployment-wide already and stays so if
+workers or replicas are added. `tests/test_sandbox_slots.py` checks the slot
+logic, and with `TEST_DATABASE_URL` set it checks that two sessions contend for
+one slot and that a killed process frees its slot.
 
 ## Running on Modal
 
@@ -129,7 +155,7 @@ log when rate-limited, and took up to 16.6 s for a 30 s render.
 | Pinned build | Partly kept: digests and commit are pinned, but Modal builds and caches the image itself | Built from the same Dockerfile |
 | Supervisor split | Kept | `/proc/1/environ` and `/proc/self/environ` unreadable |
 | Cleanup | Kept, slower: if the host process dies, the VM idles until its timeout (wall clock + 30 s) | Killed the host mid-run; no sandbox was left 50 s later |
-| Concurrency | Kept: per-process semaphore | 10 at once took 1.2 s in total |
+| Concurrency | Kept, and deployment-wide with Postgres (see [Concurrency](#concurrency)) | 10 at once took 1.2 s in total |
 | Shared kernel | Improved: own VM kernel | Guest reports its own kernel |
 
 Runaway patches, 10 runs each: endless loop `timeout` 10/10, console flood
@@ -166,4 +192,5 @@ small VM running Docker with gVisor.
 | `PD_SANDBOX_IMAGE` | `pd-sandbox:latest` | Image to run |
 | `PD_SANDBOX_RUNTIME` | Docker's default | For example `runsc` |
 | `PD_SANDBOX_DOCKER` | `docker` on `PATH` | Docker CLI path |
-| `PD_SANDBOX_CONCURRENCY` | `2` | Runs at once per process |
+| `PD_SANDBOX_CONCURRENCY` | `2` | Runs at once: across the deployment with a Postgres lock database, otherwise per process |
+| `PD_SANDBOX_LOCK_URL` | `DATABASE_URL` | Postgres database whose advisory locks count the runs; a non-Postgres URL means per process only |

@@ -48,7 +48,7 @@ from .events import (
     ToolResult,
 )
 from .guardrails import ToolPolicy, run_guarded_tool
-from .llm import ModelClient, ModelDelta, ModelRequest, ModelTurn
+from .llm import ModelClient, ModelDelta, ModelRequest, ModelTurn, ToolCallRequest
 from .prompt import AGENT_SYSTEM_PROMPT
 from .retrieval import chunks_to_sources
 from .tools import ToolOutcome, ToolRegistry
@@ -118,10 +118,20 @@ def _is_tool_error(name: str, outcome: ToolOutcome) -> bool:
     return False
 
 
-def _tool_error_key(name: str, arguments: Mapping[str, Any]) -> tuple[str, str]:
-    """Identify the error episode so a later clean call can resolve it."""
+def _tool_error_key(
+    name: str, arguments: Mapping[str, Any], outcome: ToolOutcome
+) -> tuple[str, str]:
+    """Identify the error episode so a later clean call can resolve it.
+
+    A patch tool is keyed by the patch's stored name, which its result reports
+    whether the call named the patch by id or by name (TASK-5.32); the call's
+    own argument is the fallback for a patch the workspace does not know.
+    """
     if name in _PATCH_TARGET_TOOLS:
-        return (name, str(arguments.get("name") or ""))
+        patch = (
+            outcome.data.get("name") or arguments.get("name") or arguments.get("id") or ""
+        )
+        return (name, str(patch))
     return (name, "")
 
 
@@ -239,13 +249,8 @@ class AgentLoop:
             # arrive, and only a generator body can yield them.
             final: ModelTurn | None = None
             turn_t0 = time.perf_counter()
-            obs = observability.start_obs(
-                "agent_turn", as_type="generation",
-                model=self.config.model, metadata={"turn": turn + 1},
-                trace_context=trace_context,
-            )
             try:
-                async for piece in self.client.stream_turn(request):
+                async for piece in self._turn_pieces(request, turn + 1, trace_context):
                     if isinstance(piece, ModelDelta):
                         if not piece.text:
                             continue
@@ -267,7 +272,7 @@ class AgentLoop:
                         final = piece
             finally:
                 turn_latency_ms = round((time.perf_counter() - turn_t0) * 1000, 2)
-                self._record_turn(obs, final)
+            self._account_turn(final)
 
             if final is None:
                 logger.error("model stream produced no final turn")
@@ -378,9 +383,9 @@ class AgentLoop:
             for call in final.tool_calls:
                 yield ToolCall(id=call.id, name=call.name, arguments=dict(call.input))
                 tool_t0 = time.perf_counter()
-                outcome = await self._run_tool(call.name, call.input)
+                outcome = await self._run_tool(call)
                 tool_latency_ms = round((time.perf_counter() - tool_t0) * 1000, 2)
-                error_key = _tool_error_key(call.name, call.input)
+                error_key = _tool_error_key(call.name, call.input, outcome)
                 if _is_tool_error(call.name, outcome):
                     self.state.tool_errors += 1
                     open_errors.add(error_key)
@@ -474,46 +479,82 @@ class AgentLoop:
             yield TextDelta(text)
         pending.clear()
 
-    def _record_turn(self, obs: Any, final: ModelTurn | None) -> None:
-        """Close the turn's trace span and account its tokens."""
-        if final is not None:
-            try:
-                obs.update(
-                    output=final.text[:500],
-                    usage_details=final.usage,
-                    cost_details=observability.cost_from_usage(
-                        self.config.model, final.usage
-                    ),
-                )
-            except Exception:
-                logger.debug("failed to record agent turn", exc_info=True)
-            observability.record_model_call("agent_turn", self.config.model, final.usage)
-            if final.usage:
-                for key, value in final.usage.items():
-                    self.state.usage[key] = self.state.usage.get(key, 0) + int(value or 0)
-                buckets = pricing.usage_buckets(self.config.model, self.state.usage)
-                bucket_total = sum(buckets.values())
-                self.state.total_tokens = (
-                    bucket_total if bucket_total else int(self.state.usage.get("total", 0))
-                )
-                cost = pricing.cost_usd(self.config.model, self.state.usage)
-                if cost is not None:
-                    self.state.cost_usd = cost
-        obs.end()
+    async def _turn_pieces(
+        self,
+        request: ModelRequest,
+        turn_num: int,
+        trace_context: dict[str, str] | None,
+    ) -> AsyncIterator[ModelDelta | ModelTurn]:
+        """Produce one model turn: its text deltas, then the completed turn.
 
-    async def _run_tool(self, name: str, arguments: Mapping[str, Any]) -> ToolOutcome:
-        """Run one tool off the event loop, enforcing policy and output checks."""
-        outcome = await asyncio.to_thread(
-            run_guarded_tool,
-            self.tools,
-            name,
-            arguments,
-            policy=self.config.tool_policy,
-            approved=self.config.approved_tools,
+        This is the seam a different runner replaces (the durable runner runs the
+        turn as a checkpointed step); everything the loop decides from the turn —
+        text handling, budgets, error accounting — stays in ``stream``.
+        """
+        final: ModelTurn | None = None
+        obs = observability.start_obs(
+            "agent_turn", as_type="generation",
+            model=request.model, metadata={"turn": turn_num},
+            trace_context=trace_context,
         )
+        try:
+            async for piece in self.client.stream_turn(request):
+                if not isinstance(piece, ModelDelta):
+                    final = piece
+                yield piece
+        finally:
+            trace_turn(obs, request.model, final)
+
+    def _account_turn(self, final: ModelTurn | None) -> None:
+        """Add the turn's tokens to the run's usage, token total and cost."""
+        if final is None or not final.usage:
+            return
+        for key, value in final.usage.items():
+            self.state.usage[key] = self.state.usage.get(key, 0) + int(value or 0)
+        buckets = pricing.usage_buckets(self.config.model, self.state.usage)
+        bucket_total = sum(buckets.values())
+        self.state.total_tokens = (
+            bucket_total if bucket_total else int(self.state.usage.get("total", 0))
+        )
+        cost = pricing.cost_usd(self.config.model, self.state.usage)
+        if cost is not None:
+            self.state.cost_usd = cost
+
+    async def _run_tool(self, call: ToolCallRequest) -> ToolOutcome:
+        """Run one tool call and count what the guardrails did to it."""
+        outcome = await self._execute_tool(call)
         if outcome.data.get("disallowed_tool"):
             self.state.disallowed_tool_calls += 1
         if outcome.data.get("injection_blocked"):
             self.state.blocked_tool_outputs += 1
         return outcome
 
+    async def _execute_tool(self, call: ToolCallRequest) -> ToolOutcome:
+        """Run one tool off the event loop, enforcing policy and output checks.
+
+        The other seam a different runner replaces (the durable runner adds the
+        human approval gate and checkpoints the call).
+        """
+        return await asyncio.to_thread(
+            run_guarded_tool,
+            self.tools,
+            call.name,
+            call.input,
+            policy=self.config.tool_policy,
+            approved=self.config.approved_tools,
+        )
+
+
+def trace_turn(obs: Any, model: str, final: ModelTurn | None) -> None:
+    """Close a model turn's trace span and record its call metrics."""
+    if final is not None:
+        try:
+            obs.update(
+                output=final.text[:500],
+                usage_details=final.usage,
+                cost_details=observability.cost_from_usage(model, final.usage),
+            )
+        except Exception:
+            logger.debug("failed to record agent turn", exc_info=True)
+        observability.record_model_call("agent_turn", model, final.usage)
+    obs.end()

@@ -853,3 +853,176 @@ class TestSessionPatchWorkspace:
         assert [item.name for item in listing] == ["bell"]
         assert listing[0].revision == 2
         assert listing[0].patch.objects[0].text == "osc~ 220"
+
+
+class TestSameLoopAsStreaming:
+    """TASK-5.31: the durable runner is AgentLoop over steps, not a copy of it."""
+
+    METRICS = (
+        "turns", "tool_calls", "total_tokens", "retrieval_calls", "tool_errors",
+        "recovered_errors", "unresolved_errors", "disallowed_tool_calls",
+        "blocked_tool_outputs", "budget_exceeded", "stop_reason",
+    )
+
+    WIRE = {"srcId": "0", "srcOutlet": 0, "dstId": "1", "dstInlet": 0}
+
+    REPAIR = [
+        # Narration before a search is dropped.
+        {"text": "Let me look that up.",
+         "tool_calls": [{"id": "c1", "name": "search_docs", "input": {"query": "osc~"}}]},
+        {"tool_calls": [{"id": "c2", "name": "write_patch", "input": {
+            "name": "bell", "objects": OSC_OBJECTS, "connections": [WIRE]}}]},
+        # The first run fails, the second recovers.
+        {"tool_calls": [{"id": "c3", "name": "run_patch", "input": {"name": "bell"}}]},
+        {"tool_calls": [{"id": "c4", "name": "run_patch", "input": {"name": "bell"}}]},
+        {"text": "It now runs cleanly."},
+    ]
+
+    # Text written beside write_patch is kept (the old durable copy lost it).
+    KEEP = [
+        {"tool_calls": [{"id": "c1", "name": "search_docs", "input": {"query": "osc~"}}]},
+        {"text": "Here is a bell built from osc~.",
+         "tool_calls": [{"id": "c2", "name": "write_patch", "input": {
+             "name": "bell", "objects": OSC_OBJECTS, "connections": [WIRE]}}]},
+        {"text": "Play it with the toggle."},
+    ]
+
+    BUDGET = [
+        {"text": "Checking.",
+         "tool_calls": [{"id": "c1", "name": "search_docs", "input": {"query": "osc~"}}],
+         "usage": {"input": 5000, "output": 100, "total": 5100}},
+        {"text": "never reached"},
+    ]
+
+    @staticmethod
+    def _registry(workspace, runs: list[int]):
+        class FlakyRunPatch:
+            spec = ToolSpec(name="run_patch", description="run", input_schema={"type": "object"})
+
+            def run(self, arguments):
+                runs.append(1)
+                clean = len(runs) > 1
+                return ToolOutcome(
+                    content=json.dumps({"ran_cleanly": clean}),
+                    summary="ran bell",
+                    data={"name": arguments.get("name"), "ran_cleanly": clean},
+                )
+
+        return ToolRegistry([
+            CountingTool(
+                "search_docs",
+                ToolOutcome(content="osc~ docs", summary="1 hit", chunks=(CHUNK,)),
+                [],
+            ),
+            WritePatchTool(workspace),
+            FlakyRunPatch(),
+        ])
+
+    def _streaming(self, turns, config):
+        from agent.loop import AgentLoop
+
+        loop = AgentLoop(
+            IndexedScriptedClient(turns), self._registry(PatchWorkspace(), []), config
+        )
+
+        async def drain():
+            async for _ in loop.stream("Build a bell"):
+                pass
+
+        asyncio.run(drain())
+        return loop.state
+
+    def _durable(self, turns, config, run_store, run_id):
+        runs: list[int] = []
+        client = IndexedScriptedClient(turns)
+        set_runtime(DurableRuntime(
+            client_factory=lambda: client,
+            tools_factory=lambda ws, iface, pol, approved: self._registry(ws, runs),
+            config_factory=lambda iface, pol, approved: config,
+            run_store=run_store,
+            classify_fn=lambda q, h: IN_SCOPE,
+        ))
+
+        async def go():
+            _, _, handle = await start_durable_run(
+                "Build a bell", run_id=run_id, session_id="sess-same",
+                interface="web", pause_for_approval=False,
+            )
+            return await handle.get_result()
+
+        return asyncio.run(go())
+
+    @pytest.mark.parametrize("script,config", [
+        ("REPAIR", AgentConfig(max_turns=6)),
+        ("KEEP", AgentConfig(max_turns=6)),
+        ("BUDGET", AgentConfig(max_turns=6, max_tokens_budget=1000)),
+        ("REPAIR", AgentConfig(max_turns=2)),
+    ], ids=["repair", "text-beside-write-patch", "budget-stop", "turn-limit"])
+    def test_a_durable_run_matches_the_streaming_loop(self, dbos_env, script, config):
+        run_store, _ = dbos_env
+        turns = getattr(self, script)
+        streamed = self._streaming(turns, config)
+        durable = self._durable(
+            turns, config, run_store, f"run-same-{script}-{config.max_turns}"
+        )
+
+        assert durable["answer"] == streamed.answer
+        assert {k: durable[k] for k in self.METRICS} == {
+            k: getattr(streamed, k) for k in self.METRICS
+        }
+        assert durable["cost_usd"] == round(streamed.cost_usd, 8)
+        assert durable["status"] == "completed"
+
+    def test_text_beside_write_patch_survives_a_durable_run(self, dbos_env):
+        run_store, _ = dbos_env
+        result = self._durable(self.KEEP, AgentConfig(max_turns=6), run_store, "run-keep")
+        assert result["answer"] == "Here is a bell built from osc~.\n\nPlay it with the toggle."
+
+    def test_the_repair_run_counts_the_recovery(self, dbos_env):
+        run_store, _ = dbos_env
+        result = self._durable(self.REPAIR, AgentConfig(max_turns=6), run_store, "run-rep")
+        assert result["answer"] == "It now runs cleanly."
+        assert (result["tool_errors"], result["recovered_errors"]) == (1, 1)
+        assert result["unresolved_errors"] == 0
+
+        stored = run_store.get_run("run-rep")
+        types_ = [ev["event_type"] for ev in stored["events"]]
+        seqs = [ev["seq"] for ev in stored["events"]]
+        assert seqs == list(range(len(seqs)))
+        assert types_.index("sources") < types_.index("text_delta")
+        assert types_[-1] == "done"
+
+    def test_a_low_faithfulness_score_appends_the_disclaimer(self, dbos_env):
+        from agent.guardrails import LOW_FAITHFULNESS_DISCLAIMER
+
+        run_store, _ = dbos_env
+        client = IndexedScriptedClient([
+            {"tool_calls": [{"id": "c1", "name": "search_docs", "input": {"query": "osc~"}}]},
+            {"text": "osc~ is a sawtooth."},
+        ])
+        checked: list[str] = []
+
+        def judge(question, answer, chunks):
+            checked.append(answer)
+            return {"score": 1, "explanation": "contradicts the excerpt"}
+
+        set_runtime(DurableRuntime(
+            client_factory=lambda: client,
+            tools_factory=lambda ws, iface, pol, approved: self._registry(ws, []),
+            config_factory=lambda iface, pol, approved: AgentConfig(max_turns=4),
+            run_store=run_store,
+            classify_fn=lambda q, h: IN_SCOPE,
+            faithfulness_fn=judge,
+        ))
+
+        async def go():
+            _, _, handle = await start_durable_run(
+                "What is osc~?", run_id="run-faith", session_id="sess-faith",
+                interface="web", pause_for_approval=False,
+            )
+            return await handle.get_result()
+
+        result = asyncio.run(go())
+        assert checked == ["osc~ is a sawtooth."]
+        assert result["answer"] == "osc~ is a sawtooth." + LOW_FAITHFULNESS_DISCLAIMER
+        assert run_store.get_run("run-faith")["answer"] == result["answer"]
