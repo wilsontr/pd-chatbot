@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-28 02:48'
-updated_date: '2026-11-28 05:17'
+updated_date: '2026-11-28 05:25'
 labels:
   - agent
   - skills
@@ -23,9 +23,9 @@ Load rate 44% in CI run 46095333752 (floor 50%); six questions loaded 0/3 or 1/3
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The skill is loaded for at least half of its golden slice in a 3-trial CI run
+- [x] #1 The skill is loaded for at least half of its golden slice in a 3-trial CI run
 - [ ] #2 abs-010 and abs-012 answers cite excerpts that support them, or the skill says the docs do not cover the point
-- [ ] #3 The skill passes the CI gate and its activation carries CI evidence
+- [x] #3 The skill passes the CI gate and its activation carries CI evidence
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -42,4 +42,6 @@ Load rate 44% in CI run 46095333752 (floor 50%); six questions loaded 0/3 or 1/3
 <!-- SECTION:NOTES:BEGIN -->
 Judge reasons (CI run 46095333752): abs-010 and abs-012 cited sections or URLs that did not support them (6.5 building-from-source for a path problem); abs-010 answers also contradicted the docs on whether open instances update, which the skill itself asserted in two places. Manual 2.8.1 says saved changes 'affect all invocations of it as they are created'; 3.4 says the search paths load externals and abstractions; [pdcontrol] (args) and [clone] pages are indexed.
 Local, 15 x 2: load rate old description 43%, new 60%; false triggers on 18 questions from other skills 0/18. Judged 15 x 2 with the new description and anchors: faithfulness 4.47, relevance 4.80, citation 4.20, load 67% (abs-010 and abs-012 still citation 2-3, hence step 3).
+
+CI gate 46111406363 passed and activated (ec99fa2): faithfulness 4.69, relevance 4.84, citation 4.09, load 78% (was 44%). abs-010 citation 2/4/4 and abs-012 2/5/4 across the three trials (were 2/2/2 and 2/2/2): better, not fixed. In trial 1 abs-012 still cited section 6.5 (macOS build) for a path problem, and abs-010 cited a section on persistence. AC2 left unchecked; AC1 and AC3 verified by this run.
 <!-- SECTION:NOTES:END -->
