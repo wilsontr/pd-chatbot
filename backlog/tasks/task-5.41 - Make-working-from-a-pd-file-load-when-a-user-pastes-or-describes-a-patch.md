@@ -1,11 +1,11 @@
 ---
 id: TASK-5.41
 title: Make working-from-a-pd-file load when a user pastes or describes a patch
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-28 02:47'
-updated_date: '2026-11-28 04:42'
+updated_date: '2026-11-28 05:00'
 labels:
   - agent
   - skills
@@ -23,9 +23,9 @@ The skill is almost never selected: load rate 9% (4/45) in CI run 46095333752, a
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The skill's description makes the model call load_skill for pasted #N canvas text and for questions about reading or changing an existing .pd file
-- [ ] #2 pd-file-003 and pd-file-013 are replaced or given the patch text they need, so no golden question is unanswerable by construction
-- [ ] #3 The skill passes the CI gate (skills.yml, 3 trials) and its activation carries CI evidence
+- [x] #1 The skill's description makes the model call load_skill for pasted #N canvas text and for questions about reading or changing an existing .pd file
+- [x] #2 pd-file-003 and pd-file-013 are replaced or given the patch text they need, so no golden question is unanswerable by construction
+- [x] #3 The skill passes the CI gate (skills.yml, 3 trials) and its activation carries CI evidence
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -49,4 +49,12 @@ CI re-gate 46106340591 after the Citations section: citation 3.77, faithfulness 
 
 Indexed the file format (user decision). No official source exists: the Pd manual (msp.ucsd.edu and the upstream doc/1.manual) never documents the .pd format. Added the community 'Unofficial PD v0.37 fileformat specification' (Asselbergs and Sietsma, 2004, GNU FDL 1.2, puredata.info/docs/developer/PdFileFormat) as sources/pd_file_format.json, 18 sections (GUI widget records and the EBNF appendix omitted), with its licence notice and modification note in sources/README.md; the licence text itself is linked, as on the original page, not copied. parse_file_format.py merges it idempotently into the committed chunk files (18 parent, 56 child chunks, additions only) and chunk.py includes it in a full rebuild. Excerpts are labelled per source (agent/retrieval.py SOURCE_LABELS; this also fixes the Puckette book being labelled 'MSP Manual'). The skill's Citations section now cites the spec, says it is unofficial and for Pd 0.37, and keeps object behaviour on the manual/reference.
 Validation: retrieval eval unchanged (hybrid recall@5 75.00%, MRR 0.696); non-sandbox suite 876 passed; tests/test_file_format_source.py. Local judged run 15 x 2: citation 4.57, faithfulness 4.54, relevance 4.89, load 63% (pd-file-006 went from 1-2 to 5/5).
+
+CI gate 46108810720 passed (faithfulness 4.34, relevance 4.83, citation 4.20, load 58%) but the activation step failed on 'git cherry-pick -q' (no such flag; fixed in 3a2a439). Re-gate 46109474101 passed again (faithfulness 4.50, relevance 4.90, citation 4.50, load 64%) and committed the activation with CI evidence (b1449d6) after re-applying onto a moved main. evaluation.skills --verify no longer lists working-from-a-pd-file.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+working-from-a-pd-file now passes its CI gate and is activated with CI evidence (run 46109474101: faithfulness 4.50, relevance 4.90, citation 4.50, load 64%, up from 9%). Three changes: a description that names its trigger (pasted #N canvas / #X lines or the user's own .pd file), golden questions that include the patch they ask about, and the .pd file format added to the corpus from the unofficial Pd 0.37 spec (GNU FDL), which the skill now cites with its caveats. Retrieval eval unchanged.
+<!-- SECTION:FINAL_SUMMARY:END -->

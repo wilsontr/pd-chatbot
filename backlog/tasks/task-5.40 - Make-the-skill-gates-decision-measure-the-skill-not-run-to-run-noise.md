@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-28 01:44'
-updated_date: '2026-11-28 02:46'
+updated_date: '2026-11-28 05:00'
 labels:
   - agent
   - skills
@@ -47,6 +47,8 @@ evaluation.skills --trials N answers each question N times and pools every answe
 Validation: tests/test_skill_activation.py::TestPooledTrials, tests/test_skill_golden.py (15-question floor), tests/test_ci_workflows.py::test_the_skill_gate_pools_three_trials; non-sandbox suite 874 passed.
 
 CI run 46095333752 (all six, 15+ x 3): granular-synthesis passed (faithfulness 4.15, relevance 4.96, citation >= 4, load 56%) but its push was rejected because main moved; fixed in b025b94 (cherry-pick the activation onto the tip, 3 attempts). Re-gate 46098822877 of granular-synthesis alone: faithfulness 4.10, relevance 4.85, load 52%, citation 3.98 -> fail by 0.02. The two runs agree to within ~0.1 on every metric (the old 5x1 runs disagreed by up to 1.6), so the decision is now stable and granular-synthesis sits on the citation line. Other results (46095333752): abstractions-and-dollar-zero load 44%; dsp-debugging citation 3.38, load 47%; pd-flavors new version relevance 4.38 (its earlier CI-gated version keeps serving); wavetables faithfulness 3.82; working-from-a-pd-file load 9%.
+
+The activation retry in skills.yml first shipped with 'git cherry-pick -q', which git rejects; fixed in 3a2a439 and confirmed by run 46109474101, whose activation landed after main had moved.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
