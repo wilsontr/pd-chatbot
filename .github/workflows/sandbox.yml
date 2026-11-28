@@ -67,6 +67,12 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pytest
+      # `-m sandbox` still imports every test module, and some import the
+      # retriever, which opens the index at import time.
+      - name: Build ChromaDB index (embeddings must be precomputed)
+        env:
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: python embed_and_index.py
       - name: Build the image
         run: docker build -t pd-sandbox sandbox/
       - name: Run every test that needs the sandbox
