@@ -91,7 +91,7 @@ def test_the_retrieval_line_matches(retrieval):
 def test_the_readme_cites_the_baseline_not_the_routine_report():
     intro = README[: README.index("## Sources")]
     assert "[EVAL_BASELINE.md](docs/EVAL_BASELINE.md)" in intro
-    measured = README[README.index("**Measured** (2026-11-24"):].split("\n\n")[0]
+    measured = README[README.index("**Measured** (20"):].split("\n\n")[0]
     assert "(docs/EVAL_BASELINE.md)" in measured and "(docs/EVAL.md)" not in measured
 
 

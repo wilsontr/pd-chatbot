@@ -5,10 +5,13 @@ own gate because every run costs money, so it is sampled, run from CI rather
 than from pytest, and fails the build on a regression instead of asserting a
 threshold after the fact.
 
-Baseline measured 2026-11-24 with the shipping configuration (claude-haiku-5-5
+Baseline measured 2026-11-28 with the shipping configuration (claude-haiku-5-5
 with thinking disabled, claude-haiku-4-5 judge, 1-5 rubric), 30 entries x 3
-trials: faithfulness 4.63 ± 0.14, relevance 4.81 ± 0.02, citation correctness
-4.50 ± 0.09. That baseline is *after* the TASK-5.22 judge-rubric correction
+trials, pipeline arm: faithfulness 4.57 ± 0.21, relevance 4.80 ± 0.07, citation
+correctness 4.70 ± 0.03 (agent arm 4.72 / 4.88 / 4.52). It is the first baseline
+in which the judge sees each excerpt's URL (TASK-5.47); before that it could not
+verify URL citations and scored citation ~0.2 lower for the pipeline (4.50 on
+2026-11-24). That baseline is also *after* the TASK-5.22 judge-rubric correction
 (the judge now states Pd's inlet/outlet ordering rule and is controlled in both
 directions by ``evaluation/judge_controls.py``), the TASK-5.23 object-attribution
 prompt rules and the TASK-5.24 pd-patch count canonicalisation; the changes moved
@@ -28,8 +31,11 @@ integer-scored entries a mean moves ~0.2 run-to-run, so a threshold close to
 that would be flaky and one close to the old 4.4 baseline would not detect the
 regression at all. The 4.0 threshold is therefore a floor that catches citation
 collapse (invented or missing URLs driving scores toward 3); the 30-entry
-comparison in docs/EVAL.md and docs/MODEL_COMPARISON.md remains the precise
-instrument for citation quality.
+comparison in docs/EVAL_BASELINE.md and docs/MODEL_COMPARISON.md remains the
+precise instrument for citation quality. With URLs visible to the judge the
+30-entry means sit at 4.70 (pipeline) and 4.52 (agent), so the 4.0 floor now
+leaves a wider margin; it was kept rather than raised so a gate decision stays
+comparable across the TASK-5.47 change.
 
 This module is deliberately dependency-free (no rag, chroma or API clients) so
 the gate logic is unit-testable without keys.
@@ -46,7 +52,7 @@ from model_config import ANSWER_MODEL, JUDGE_MODEL
 from . import claims
 
 # Means on the 1-5 judge scale below which the build fails. The 30-entry
-# baselines (2026-11-24, corrected rubric) are 4.63 / 4.81 / 4.50; the 10-entry
+# pipeline baseline (2026-11-28, judge sees URLs) is 4.57 / 4.80 / 4.70; the 10-entry
 # CI prefix measures lower for citation, which is why that threshold is a floor
 # rather than a tight bound — see the module docstring.
 GENERATION_THRESHOLDS: dict[str, float] = {

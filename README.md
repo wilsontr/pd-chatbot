@@ -18,11 +18,11 @@ golden set, three trials per arm ([EVAL_BASELINE.md](docs/EVAL_BASELINE.md)):
 
 | | Result |
 |---|---|
-| Answer quality | level with the pipeline — faithfulness **4.61** vs 4.63, relevance 4.86 vs 4.81, citation 4.48 vs 4.50 |
-| Retrieval | its own `search_docs` calls beat the pipeline's fixed search — recall@5 **76.1%** vs 75.0%, MRR 0.703 vs 0.696 |
+| Answer quality | level on faithfulness and relevance, behind on citation — faithfulness **4.72** vs 4.57, relevance 4.88 vs 4.80, citation 4.52 vs 4.70 |
+| Retrieval | its own `search_docs` calls beat the pipeline's fixed search on recall — recall@5 **78.9%** vs 75.0%, MRR 0.689 vs 0.696 |
 | Patches | running its own patches lifts spec-compliant output from **73% to 92%** |
 
-The loop does not buy answer quality; it buys the mechanism — re-searching,
+The loop does not buy answer quality — on citation it costs a little; it buys the mechanism — re-searching,
 running tools, correcting itself. Where that pays off is measured, and where it
 still fails is written up in the [failure modes](docs/FAILURE_MODES.md).
 
@@ -218,37 +218,44 @@ python -m evaluation.evaluate --all --mode both --agent-retrieval --sample 30 \
   --trials 3 --report docs/EVAL_BASELINE.md
 ```
 
-**Measured** (2026-11-24, full 30 entries, both arms, 3 trials, recorded command
+**Measured** (2026-11-28, full 30 entries, both arms, 3 trials, recorded command
 above — the tables and the mean ± std are in [EVAL_BASELINE.md](docs/EVAL_BASELINE.md)):
 
 | | Faithfulness | Relevance | Citation | Cost/query | p50 | p95 |
 |---|---|---|---|---|---|---|
-| Pipeline | 4.63 ± 0.14 | 4.81 ± 0.02 | 4.50 ± 0.09 | $0.0110 | 3.7 s | 5.4 s |
-| Agent | 4.61 ± 0.11 | 4.86 ± 0.05 | 4.48 ± 0.10 | $0.0123 | 5.5 s | 7.6 s |
+| Pipeline | 4.57 ± 0.21 | 4.80 ± 0.07 | 4.70 ± 0.03 | $0.0112 | 3.7 s | 5.3 s |
+| Agent | 4.72 ± 0.09 | 4.88 ± 0.02 | 4.52 ± 0.07 | $0.0122 | 5.8 s | 8.3 s |
 
-The TASK-5.1 parity conclusion **holds** at 30 entries x 3 trials: the paired
-per-trial differences are faithfulness −0.02 ± 0.12, relevance +0.05 ± 0.05 and
-citation −0.02 ± 0.02 (agent − pipeline), and none is both larger than its own
-spread and at least 0.1, so the honest verdict is "matches" — the agent is level
-on faithfulness and citation and a hair ahead on relevance. What the agent buys
-is retrieval, not answer quality: its own `search_docs` calls beat the pipeline's
-single routed search at 30 entries in the latest run (recall@5 76.1% vs. 75.0%,
-recall@10 76.1% vs. 75.0%, MRR 0.703 vs. 0.696, nDCG@5 0.697 vs. 0.692), and they
-do it with 1.5 tool calls per question, at +1.8 s p50 / +2.2 s p95 latency and
-+$0.0013 per query. The agent-tool-call row is a single-turn, single-run
-measurement and is noisy — a one-line prompt change has moved recall@5 from 80.6%
-to 76.1% — so read the direction, not the exact points. The measured dollar cost
-of that run was **$2.10**. The loop alone does not beat a well-tuned pipeline on
-answer quality; what it buys is the mechanism — re-searching, running tools,
-self-correcting — that the sandbox and skill subtasks are measured on.
+At 30 entries x 3 trials the agent **matches the pipeline on faithfulness and
+relevance and trails it on citation**: the paired per-trial differences are
+faithfulness +0.15 ± 0.24, relevance +0.08 ± 0.07 and citation −0.18 ± 0.10
+(agent − pipeline). Only citation is both larger than its own spread and at
+least 0.1. This is the first baseline in which the judge sees each excerpt's URL
+(TASK-5.47): before that it could not verify a URL citation and marked correct
+ones as fabricated, which pulled both arms' citation down and hid the gap
+(previously 4.48 vs 4.50). The pipeline cites from one fixed set of excerpts; the
+agent cites across the results of several searches, and loses a little precision
+doing it. What the agent buys is retrieval, not answer quality: its own
+`search_docs` calls beat the pipeline's single routed search on recall at 30
+entries (recall@5 78.9% vs. 75.0%, recall@10 83.9% vs. 75.0%, nDCG@10 0.764 vs.
+0.692), with MRR level (0.689 vs. 0.696), at 1.7 tool calls per question,
++2.1 s p50 / +3.0 s p95 latency and +$0.0010 per query. The agent-tool-call row
+is a single-turn, single-run measurement and is noisy — a one-line prompt change
+has moved recall@5 by several points — so read the direction, not the exact
+points. The measured dollar cost of that run was **$2.10**. The loop alone does
+not beat a well-tuned pipeline on answer quality; what it buys is the mechanism —
+re-searching, running tools, self-correcting — that the sandbox and skill
+subtasks are measured on.
 
-These numbers are post-correction for the judge's inlet-order belief (TASK-5.22),
-the agent's object-attribution prompt rules (TASK-5.23) and pd-patch count
-canonicalisation (TASK-5.24), so they are not directly comparable to the
-pre-correction table; the per-arm change from the TASK-5.21 baseline is pipeline
-faithfulness 4.71 → 4.63 and agent 4.66 → 4.61, both inside the observed
-single-entry judge noise (unchanged prompts have moved individual entries by up
-to two points between runs).
+These numbers follow the judge's inlet-order correction (TASK-5.22), the
+agent's object-attribution prompt rules (TASK-5.23), pd-patch count
+canonicalisation (TASK-5.24) and the judge seeing excerpt URLs (TASK-5.47), so
+they are not directly comparable to earlier tables. Against the previous
+baseline (2026-11-24, same prompts, URLs hidden from the judge) citation moved
+4.50 → 4.70 for the pipeline and 4.48 → 4.52 for the agent, while faithfulness
+(4.63 → 4.57, 4.61 → 4.72) and relevance moved within the observed judge noise
+(unchanged prompts have moved individual entries by up to two points between
+runs).
 
 Two caveats are measured, not assumed. The judge's ordering belief was wrong in
 both directions — it scored a self-contradicting `[line~]` list example 5/5/5
