@@ -8,12 +8,12 @@ Thresholds: faithfulness >= 4, relevance >= 4.5, citation_correctness >= 4, load
 
 | Skill | Version | Activated | Gate | Faithfulness | Relevance | Citation | Task success | Loaded |
 |---|---|---|---|---|---|---|---|---|
-| abstractions-and-dollar-zero | `5433fba8eed4` | `5433fba8eed4` | baseline (not measured) | — | — | — | — | — |
-| dsp-debugging | `b10d1256e39a` | `b10d1256e39a` | baseline (not measured) | — | — | — | — | — |
-| granular-synthesis | `41e503ae5451` | `41e503ae5451` | baseline (not measured) | — | — | — | — | — |
-| pd-flavors | `dfec472f9f1c` | `dfec472f9f1c` | baseline (not measured) | — | — | — | — | — |
-| wavetables | `0cf6f136b95d` | `0cf6f136b95d` | activated | 4.25 | 5.00 | 4.25 | 100% | 75% |
-| working-from-a-pd-file | `2916d46307a2` | `2916d46307a2` | baseline (not measured) | — | — | — | — | — |
+| abstractions-and-dollar-zero | `5433fba8eed4` | `5433fba8eed4` | fail | 5.00 | 5.00 | 5.00 | 100% | 40% |
+| dsp-debugging | `b10d1256e39a` | `b10d1256e39a` | fail | 3.80 | 5.00 | 3.20 | 20% | 60% |
+| granular-synthesis | `41e503ae5451` | `41e503ae5451` | fail | 4.40 | 4.40 | 4.60 | 60% | 60% |
+| pd-flavors | `dfec472f9f1c` | `dfec472f9f1c` | pass | 5.00 | 4.50 | 4.50 | 60% | 100% |
+| wavetables | `0cf6f136b95d` | `0cf6f136b95d` | fail | 3.00 | 5.00 | 4.75 | 25% | 75% |
+| working-from-a-pd-file | `2916d46307a2` | `2916d46307a2` | fail | 5.00 | 5.00 | 4.50 | 50% | 0% |
 
 Per-question results, including the judge's explanations and any claim checks, are in the run's JSON output (`--output`) and the CI job summary. The generation and retrieval eval report is in [EVAL.md](EVAL.md).
 
@@ -22,6 +22,6 @@ Per-question results, including the judge's explanations and any claim checks, a
 - `abstractions-and-dollar-zero` at `5433fba8eed4` — activated 2026-11-26T00:15:28Z by baseline
 - `dsp-debugging` at `b10d1256e39a` — activated 2026-11-26T00:15:28Z by baseline
 - `granular-synthesis` at `41e503ae5451` — activated 2026-11-26T00:15:28Z by baseline
-- `pd-flavors` at `dfec472f9f1c` — activated 2026-11-26T00:15:28Z by baseline
+- `pd-flavors` at `dfec472f9f1c` — activated 2026-11-28T01:33:49Z by wilsontr ([CI run](https://github.com/wilsontr/pd-chatbot/actions/runs/46093371333))
 - `wavetables` at `0cf6f136b95d` — activated 2026-11-27T17:27:22Z by local
 - `working-from-a-pd-file` at `2916d46307a2` — activated 2026-11-26T00:15:28Z by baseline

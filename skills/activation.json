@@ -34,11 +34,27 @@
     "pd-flavors": {
       "version": "dfec472f9f1c",
       "digest": "dfec472f9f1c95bf52827fe44acb9ef2f1a43ad109edb2e2439bdda7480630c0",
-      "activated_at": "2026-11-26T00:15:28Z",
-      "activated_by": "baseline",
+      "activated_at": "2026-11-28T01:33:49Z",
+      "activated_by": "wilsontr",
       "metrics": {
-        "baseline": true,
-        "reason": "TASK-5.15 pre-gate baseline"
+        "questions": 5,
+        "judged": 4,
+        "task_success_rate": 0.6,
+        "load_rate": 1.0,
+        "faithfulness_mean": 5.0,
+        "relevance_mean": 4.5,
+        "citation_correctness_mean": 4.5,
+        "avg_cost_usd": 0.001033,
+        "avg_latency_ms": 5117.5,
+        "model": "claude-haiku-5-5",
+        "judge_model": "claude-haiku-4-5",
+        "ci": {
+          "run_id": "46093371333",
+          "run_url": "https://github.com/wilsontr/pd-chatbot/actions/runs/46093371333",
+          "workflow": "Skill eval gate",
+          "event": "workflow_dispatch",
+          "commit": "db48672bcc12d6fb3e7d178fed9f62d4c0d7763a"
+        }
       }
     },
     "wavetables": {
