@@ -159,7 +159,7 @@ jobs:
           for attempt in 1 2 3; do
             git fetch -q origin "$TARGET"
             git checkout -q --detach FETCH_HEAD
-            git cherry-pick -q "$activation"
+            git cherry-pick "$activation" >/dev/null
             if git push origin "HEAD:$TARGET"; then exit 0; fi
             echo "push rejected (attempt $attempt)"
           done
