@@ -1,9 +1,11 @@
 ---
 id: TASK-5.43
 title: Ground dsp-debugging answers in their excerpts and make it load for DSP faults
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-28 02:48'
+updated_date: '2026-11-28 06:14'
 labels:
   - agent
   - skills
@@ -25,3 +27,19 @@ Fails citation correctness (3.38, floor 4) and load rate (47%) in CI run 4609533
 - [ ] #2 The skill is loaded for at least half of its golden slice
 - [ ] #3 The skill passes the CI gate (citation >= 4, faithfulness >= 4) and its activation carries CI evidence
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Trigger-style description listing the symptoms it covers.
+2. Make the documented anchors search targets: cite only the Source URL of an excerpt retrieved in this answer; denormal advice uncited.
+3. Measure load rate, false triggers and judged scores locally.
+4. Gate in CI.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Local, 15 x 2: load rate old description 57%, new 77% (judged run 83%); false triggers 1/18 (wt-006, a silent tabosc4~ patch, which is a fair match for 'no sound'). Judged with the new skill: faithfulness 4.17, relevance 5.00, citation 3.70 (CI baseline 3.38).
+Measurement bug found: evaluation/judge.py builds the judge's context as '[heading]\ntext' without the chunk URL, so the judge cannot see that a cited URL came from a retrieved excerpt and marks it fabricated. Verified on dsp-007: every URL the answer cited (manual 2.1.1, 3.3.1, the dac~ page) was among the retrieved chunks, while an earlier judge of the same answer pattern called the dac~ page 'not in provided context'. This affects citation scores in the generation eval, the published baselines and every skill gate, so the fix is a decision for the user, not part of this task.
+<!-- SECTION:NOTES:END -->

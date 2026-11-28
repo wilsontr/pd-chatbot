@@ -1,6 +1,6 @@
 ---
 name: dsp-debugging
-description: Debugging a Pd DSP patch — silence, clicks, distortion, DC offset, denormals, and block~/switch~ reblocking problems — by checking causes in a fixed order.
+description: Use when a Pd audio patch misbehaves — no sound, clicks or crackles (including from a slider or [line~]), distortion or clipping, a DC offset, CPU spikes on quiet tails, extra latency from [throw~]/[catch~] or feedback, a subpatch that goes silent after [block~] or [switch~], or an FFT patch that breaks — and to inspect signal values with [print~].
 ---
 
 # Debugging DSP problems in Pd
@@ -43,9 +43,17 @@ procedure, not a source.
    — that is general technique, the docs only describe `[hip~]` as a high-pass.
    Very quiet tails getting expensive or producing denormals is **not covered by
    the Pd docs**: say so, describe it as general floating-point DSP practice, and
-   offer measures as suggestions.
+   offer measures as suggestions. Write that part with **no citation at all** —
+   no excerpt supports it, so any link attached to it is wrong.
 
 ## Documented anchors worth searching for
+
+These are **search targets, not citations**. `search_docs` for the ones the
+symptom needs (by `object_names` for object pages), and cite only what comes
+back: copy the `Source:` URL printed under the excerpt. Never type a URL, a
+section number or a page from memory, and never cite a section you did not
+retrieve in this answer — an uncited true sentence is better than a citation
+the excerpts do not contain.
 
 - **Switching and blocking** (2.5.4): block size, FFT channel count, 1-sample
   feedback at block size 1, clicks when switching, zeros from switched windows,

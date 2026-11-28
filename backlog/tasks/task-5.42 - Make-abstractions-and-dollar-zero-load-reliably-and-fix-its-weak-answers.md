@@ -1,11 +1,11 @@
 ---
 id: TASK-5.42
 title: Make abstractions-and-dollar-zero load reliably and fix its weak answers
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-28 02:48'
-updated_date: '2026-11-28 05:25'
+updated_date: '2026-11-28 05:57'
 labels:
   - agent
   - skills
@@ -44,4 +44,12 @@ Judge reasons (CI run 46095333752): abs-010 and abs-012 cited sections or URLs t
 Local, 15 x 2: load rate old description 43%, new 60%; false triggers on 18 questions from other skills 0/18. Judged 15 x 2 with the new description and anchors: faithfulness 4.47, relevance 4.80, citation 4.20, load 67% (abs-010 and abs-012 still citation 2-3, hence step 3).
 
 CI gate 46111406363 passed and activated (ec99fa2): faithfulness 4.69, relevance 4.84, citation 4.09, load 78% (was 44%). abs-010 citation 2/4/4 and abs-012 2/5/4 across the three trials (were 2/2/2 and 2/2/2): better, not fixed. In trial 1 abs-012 still cited section 6.5 (macOS build) for a path problem, and abs-010 cited a section on persistence. AC2 left unchecked; AC1 and AC3 verified by this run.
+
+Closed at the user's request with AC2 unchecked: abs-010 and abs-012 still produce one weakly cited answer in three (citation 2), down from three in three.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+abstractions-and-dollar-zero passes its CI gate and is activated with CI evidence (run 46111406363: faithfulness 4.69, relevance 4.84, citation 4.09, load 78%, up from 44%). The description now lists the situations it covers, a new section maps each point to the excerpt that states it, and the skill no longer asserts that open instances do not update. Not fully met: abs-010/abs-012 still get a weakly cited answer in one trial of three.
+<!-- SECTION:FINAL_SUMMARY:END -->
