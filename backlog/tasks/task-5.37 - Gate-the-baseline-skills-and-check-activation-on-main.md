@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-27 21:20'
-updated_date: '2026-11-28 01:44'
+updated_date: '2026-11-28 02:46'
 labels:
   - agent
   - skills
@@ -53,4 +53,6 @@ Local preview of the five baseline slices (not activated, not evidence): abstrac
 Known gap: a squash merge whose message includes the bot's '[skip ci]' line skips the push-to-main check.
 
 CI gate run 46093371333 (workflow_dispatch on main, db48672, all six skills): pd-flavors passed and was recorded with CI evidence (commit 4638af2). Failed: abstractions-and-dollar-zero (load 40%), dsp-debugging (faithfulness 3.80, citation 3.20), granular-synthesis (relevance 4.40), wavetables (faithfulness 3.00), working-from-a-pd-file (load 0%). Compared with the local preview, abstractions-and-dollar-zero and wavetables flipped pass->fail and pd-flavors fail->pass: on 4-5 question slices the gate decision is mostly noise. --verify on main now fails on the five remaining pins. AC1 and AC2 stay open pending the user's decision (deactivate, or enlarge the slices / run more trials first).
+
+After TASK-5.40 (15+ x 3 trials, runs 46095333752 and 46098822877): only pd-flavors (old version) has CI evidence. The failures are now stable measurements, not noise: working-from-a-pd-file is almost never loaded (9%), abstractions-and-dollar-zero and dsp-debugging load just under 50%, dsp-debugging citation 3.38, wavetables faithfulness 3.82, granular-synthesis citation 3.98 (passed at >= 4 in the previous run). skills-check still fails on main. Next step is the user's: improve the failing skills, or deactivate them.
 <!-- SECTION:NOTES:END -->
