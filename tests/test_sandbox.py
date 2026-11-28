@@ -19,31 +19,9 @@ import wave
 import pytest
 
 from sandbox import SandboxError, run_patch, runner
+from tests.needs_sandbox import IMAGE, MODAL, needs_sandbox
 
-IMAGE = os.environ.get("PD_SANDBOX_IMAGE", "pd-sandbox:latest")
-
-
-MODAL = os.environ.get("PD_SANDBOX_BACKEND") == "modal"
-
-
-def _image_ready():
-    if MODAL:
-        return True
-    docker = shutil.which("docker")
-    if not docker:
-        return False
-    try:
-        return subprocess.run(
-            [docker, "image", "inspect", IMAGE], capture_output=True, timeout=30
-        ).returncode == 0
-    except subprocess.TimeoutExpired:
-        return False
-
-
-needs_image = pytest.mark.skipif(
-    not os.environ.get("PD_SANDBOX_REQUIRED") and not _image_ready(),
-    reason="pd-sandbox image not built",
-)
+needs_image = needs_sandbox
 
 
 def patch(*boxes, wires=()):

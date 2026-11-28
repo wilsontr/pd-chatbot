@@ -1,9 +1,11 @@
 ---
 id: TASK-5.37
 title: Gate the baseline skills and check activation on main
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-27 21:20'
+updated_date: '2026-11-28 01:23'
 labels:
   - agent
   - skills
@@ -29,5 +31,23 @@ Five of the six skills (abstractions-and-dollar-zero, dsp-debugging, granular-sy
 <!-- AC:BEGIN -->
 - [ ] #1 Every activated skill has gated evidence recorded in skills/activation.json, or is deactivated with a recorded reason
 - [ ] #2 wavetables is re-gated in CI and its evidence replaces the local one
-- [ ] #3 A check on main fails when skills/activation.json pins a version that has no CI-gated evidence or does not match its snapshot
+- [x] #3 A check on main fails when skills/activation.json pins a version that has no CI-gated evidence or does not match its snapshot
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Record the GitHub Actions run (metrics.ci) on every CI activation.
+2. Add 'evaluation.skills --verify' (fails on a pin without Skill-eval-gate CI evidence, or a missing/mismatched snapshot) and a skills-check.yml job on main and PRs.
+3. Add '--deactivate NAME --reason' that drops the pin and records the reason under 'deactivated' in the manifest and docs/SKILLS.md.
+4. Let a manual skills.yml run commit its activations to the branch it ran on (main), keeping skills that passed even when another failed.
+5. After the push: dispatch skills.yml for every skill on main; deactivate any skill that fails, with its reason (user decision).
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Steps 1-4 implemented and tested (tests/test_skill_activation.py TestCiEvidence/TestVerify/TestDeactivate, tests/test_ci_workflows.py::TestSkillsCheck). 'python -m evaluation.skills --verify' on the current manifest fails on all six pins: five baselines and wavetables (activated by local).
+Local preview of the five baseline slices (not activated, not evidence): abstractions-and-dollar-zero passes; dsp-debugging fails load rate 40% < 50%; granular-synthesis fails faithfulness 3.40 and citation 3.20 < 4; pd-flavors fails relevance 4.00 < 4.5; working-from-a-pd-file fails relevance 4.00 < 4.5. Slices are 4-5 questions, so a CI run may differ. Deactivating the failing skills changes what production serves, so that is left to the user.
+Known gap: a squash merge whose message includes the bot's '[skip ci]' line skips the push-to-main check.
+<!-- SECTION:NOTES:END -->

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Commit docs/EVAL.md to main, even if main moved while the evaluation ran.
+# Commit an evaluation report to main, even if main moved while the evaluation ran.
+# The report is docs/EVAL.md (routine) or docs/EVAL_BASELINE.md (a 3+ trial run).
 #
 # If only Backlog or Markdown files changed since the measured commit, the
 # results still describe main and are committed on its tip. Otherwise they are
 # not published: the newer commit's own run will do it.
 set -euo pipefail
 
-report=docs/EVAL.md
+report=${1:-docs/EVAL.md}
 measured=$(git rev-parse HEAD)
 
 if git diff --quiet -- "$report"; then

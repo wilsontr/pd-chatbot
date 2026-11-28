@@ -198,9 +198,9 @@ Thresholds and their rationale live in
 ## Reproduce it
 
 ```bash
-# the 30-entry, 3-trial both-arm comparison behind docs/EVAL.md
+# the 30-entry, 3-trial both-arm comparison behind docs/EVAL_BASELINE.md
 python -m evaluation.evaluate --all --mode both --agent-retrieval --sample 30 \
-  --trials 3 --report docs/EVAL.md
+  --trials 3 --report docs/EVAL_BASELINE.md
 
 # patch specs: with and without sandbox execution
 python -m evaluation.patch_eval --trials 3 --report report.md --output results.json

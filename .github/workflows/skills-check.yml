@@ -1,0 +1,45 @@
+name: Skill activation check
+
+# What a deployment serves is the set of versions pinned in
+# skills/activation.json. This check (TASK-5.37) fails when any pin lacks
+# evidence from a Skill eval gate run in CI (an ungated baseline, or an
+# activation made on someone's machine), or when its snapshot under
+# skills/.activated/ is missing or does not hash to the pinned digest. It runs
+# on main as well as on pull requests, so a direct push that hand-edits the
+# manifest or a snapshot fails here even though skills.yml never ran.
+#
+# No API calls: it reads the manifest and hashes files.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'skills/**'
+      - 'agent/skills/**'
+      - 'evaluation/skills.py'
+      - '.github/workflows/skills-check.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'skills/**'
+      - 'agent/skills/**'
+      - 'evaluation/skills.py'
+      - '.github/workflows/skills-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Every pinned skill has CI-gated evidence and a matching snapshot
+        run: python -m evaluation.skills --verify

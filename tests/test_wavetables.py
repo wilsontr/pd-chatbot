@@ -16,7 +16,8 @@ from agent.skills import SkillRegistry
 from agent.tools.patch import runnable_file
 from evaluation.patch_eval import load_tasks, score_patch
 from sandbox import run_patch
-from tests.test_patch_eval import make, needs_sandbox
+from tests.needs_sandbox import needs_sandbox
+from tests.test_patch_eval import make
 
 SPEC = next(t["spec"] for t in load_tasks() if t["id"] == "p_14")
 

@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
-import shutil
-import subprocess
-
 import pytest
 
 from evaluation.patch_eval import load_tasks, score_patch, summarize, to_markdown
 from pd_schema import PdPatch
+from tests.needs_sandbox import needs_sandbox
 
 TASKS = {t["id"]: t["spec"] for t in load_tasks()}
 
@@ -82,16 +79,6 @@ BAD = {
 }
 
 
-def _image():
-    return shutil.which("docker") and subprocess.run(
-        ["docker", "image", "inspect", os.environ.get("PD_SANDBOX_IMAGE", "pd-sandbox:latest")],
-        capture_output=True).returncode == 0
-
-
-needs_sandbox = pytest.mark.skipif(
-    not os.environ.get("PD_SANDBOX_REQUIRED") and not _image(), reason="pd-sandbox image not built")
-
-
 def test_every_task_has_both_controls():
     assert set(GOOD) == set(BAD) == set(TASKS)
 
@@ -126,3 +113,66 @@ def test_summary_separates_outages_from_failures():
     assert summary["with"]["n"] == 2 and summary["with"]["passed"] == 0.5
     assert summary["with"]["infrastructure_errors"] == 1 and "without" not in summary
     assert "50%" in to_markdown(summary, rows)
+
+
+class TestExecutionGate:
+    """TASK-5.36: the with-execution arm is gated on its own bounds."""
+
+    @staticmethod
+    def rows(passed: int, n: int = 16, *, tool_calls=6, latency=12.0, errors=0, trial=1):
+        base = {"arm": "with", "trial": trial, "wrote_patch": True, "clean": True,
+                "cost_usd": 0.004, "tool_calls": tool_calls, "runs": 2, "latency_s": latency}
+        out = [{**base, "id": f"p_{i:02}", "passed": i < passed} for i in range(n)]
+        out += [{"id": f"x_{i}", "arm": "with", "trial": trial, "error": "outage"}
+                for i in range(errors)]
+        return out
+
+    def test_a_healthy_execution_run_passes_bounds_that_would_fail_docs_mode(self):
+        from evaluation.gates import AGENT_DOCS_THRESHOLDS
+        from evaluation.patch_eval import check_gate
+
+        summary = summarize(self.rows(14, tool_calls=6, latency=25.0))
+        assert check_gate(summary) == []
+        # The same run against the docs-mode bounds: too many calls, too slow.
+        failures = check_gate(summary, AGENT_DOCS_THRESHOLDS)
+        assert any("avg_tool_calls" in f for f in failures)
+        assert any("p95_latency" in f for f in failures)
+
+    def test_pass_rate_below_the_floor_fails(self):
+        from evaluation.gates import PATCH_EVAL_PASS_FLOOR
+        from evaluation.patch_eval import check_gate
+
+        assert PATCH_EVAL_PASS_FLOOR * 16 == 12
+        assert check_gate(summarize(self.rows(12))) == []
+        failures = check_gate(summarize(self.rows(11)))
+        assert failures and "task_success_rate 0.69" in failures[0]
+
+    def test_a_runaway_repair_loop_fails(self):
+        from evaluation.patch_eval import check_gate
+
+        failures = check_gate(summarize(self.rows(16, tool_calls=14)))
+        assert any("avg_tool_calls 14.00" in f for f in failures)
+
+    def test_an_outage_is_not_scored_as_a_pass(self):
+        from evaluation.patch_eval import check_gate
+
+        assert check_gate({}) == ["no with-execution answers were scored"]
+        failures = check_gate(summarize(self.rows(16, n=10, errors=6)))
+        assert failures == ["6 of 16 answers failed on infrastructure errors"]
+
+    def test_recovery_comes_through_to_the_gate(self):
+        from evaluation.patch_eval import as_agent_summary
+
+        rows = self.rows(16)
+        for r in rows[:3]:
+            r.update(had_error=True, recovered=r is not rows[2])
+        agent = as_agent_summary(summarize(rows)["with"])
+        assert agent["tasks_with_errors"] == 3 and agent["tasks_recovered"] == 2
+        assert agent["p95_latency_ms"] == 12000
+
+    def test_the_summary_states_sample_and_cost(self):
+        from evaluation.patch_eval import gate_summary
+
+        rows = self.rows(12) + self.rows(13, trial=2)
+        text = gate_summary(summarize(rows), rows, [], "m")
+        assert "16 tasks x 2 trial(s)" in text and "$0.1280" in text and "Gate passed" in text

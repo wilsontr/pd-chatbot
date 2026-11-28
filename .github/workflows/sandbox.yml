@@ -1,29 +1,76 @@
 name: Sandbox
 
+# Builds the pd-sandbox image and runs every test that needs it: every test
+# decorated with tests.needs_sandbox, selected with `-m sandbox` (TASK-5.35).
+# Those are the sandbox itself (tests/test_sandbox.py), the agent's patch tools
+# (tests/test_patch_tools.py), the patch-eval specs (tests/test_patch_eval.py)
+# and the wavetables skill's routes (tests/test_wavetables.py). Everywhere else
+# they skip when the image is missing; here PD_SANDBOX_REQUIRED makes a missing
+# or broken image fail the job instead.
+#
+# No API calls: these tests run patches in Pd and check the output, so the job
+# costs runner minutes only.
+
 on:
   push:
     branches: [main]
-    paths: ['sandbox/**', 'tests/test_sandbox.py', '.github/workflows/sandbox.yml']
+    paths:
+      - 'agent/**'
+      - 'sandbox/**'
+      - 'skills/**'
+      - 'evaluation/patch_eval.py'
+      - 'evaluation/patch_tasks.json'
+      - 'pd_schema.py'
+      - 'tests/needs_sandbox.py'
+      - 'tests/test_sandbox.py'
+      - 'tests/test_patch_tools.py'
+      - 'tests/test_patch_eval.py'
+      - 'tests/test_wavetables.py'
+      - 'requirements.txt'
+      - '.github/workflows/sandbox.yml'
   pull_request:
     branches: [main]
-    paths: ['sandbox/**', 'tests/test_sandbox.py', '.github/workflows/sandbox.yml']
+    paths:
+      - 'agent/**'
+      - 'sandbox/**'
+      - 'skills/**'
+      - 'evaluation/patch_eval.py'
+      - 'evaluation/patch_tasks.json'
+      - 'pd_schema.py'
+      - 'tests/needs_sandbox.py'
+      - 'tests/test_sandbox.py'
+      - 'tests/test_patch_tools.py'
+      - 'tests/test_patch_eval.py'
+      - 'tests/test_wavetables.py'
+      - 'requirements.txt'
+      - '.github/workflows/sandbox.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: sandbox-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sandbox:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # ~70 tests, each starting a container: about 10 minutes.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install pytest
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
       - name: Build the image
         run: docker build -t pd-sandbox sandbox/
-      - name: Test it
+      - name: Run every test that needs the sandbox
         env:
           PD_SANDBOX_REQUIRED: '1'
-        run: python -m pytest tests/test_sandbox.py -v
+          PD_SANDBOX_BACKEND: docker
+        run: python -m pytest -m sandbox -v

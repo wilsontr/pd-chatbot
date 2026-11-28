@@ -5,9 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import os
-import shutil
-import subprocess
 import wave
 
 import numpy as np
@@ -35,6 +32,7 @@ from agent.tools.patch import (
 from agent.workspace import PatchWorkspace
 from pd_schema import PdPatch
 from sandbox import SandboxError, SandboxResult, run_patch
+from tests.needs_sandbox import needs_sandbox
 
 RATE = 48000
 OBJECTS = [
@@ -413,15 +411,7 @@ class TestLoop:
         assert "couldn't create" in results[1] and "dominant_hz" in results[4]
 
 
-def _docker_image():
-    return shutil.which("docker") and subprocess.run(
-        ["docker", "image", "inspect", os.environ.get("PD_SANDBOX_IMAGE", "pd-sandbox:latest")],
-        capture_output=True).returncode == 0
-
-
-@pytest.mark.skipif(
-    not os.environ.get("PD_SANDBOX_REQUIRED") and not _docker_image(),
-    reason="pd-sandbox image not built")
+@needs_sandbox
 class TestInTheSandbox:
     def test_simulated_input_sets_the_pitch(self, workspace):
         written(workspace)

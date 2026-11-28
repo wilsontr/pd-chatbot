@@ -123,6 +123,8 @@ does have a manifest, which is the quickest way to iterate on a skill locally.
 | `python -m evaluation.skills --all --gate` | Run every slice (a release check) |
 | `python -m evaluation.skills --render-report docs/SKILLS.md` | Rewrite the per-skill report from the manifest, no API calls |
 | `python -m evaluation.skills --baseline` | Bootstrap: pin current versions unmeasured. CI never calls it |
+| `python -m evaluation.skills --verify` | Fail if a pin lacks CI-gated evidence or its snapshot does not match; no API calls |
+| `python -m evaluation.skills --deactivate NAME --reason "..."` | Stop serving a skill and record why |
 
 The gate floors are the generation eval's judge floors plus a load-rate floor
 (4.0 faithfulness, 4.5 relevance, 4.0 citation, at least half the slice must
@@ -137,9 +139,18 @@ changes, commits the activation and the report back to the PR branch, and fails
 the job on a missed threshold. A failed slice changes nothing, which is exactly
 how the previous version stays live. A direct push to `main` that skips the
 workflow leaves the changed skill on its previously activated version (and a new
-skill is not served at all); run the workflow from the Actions tab, or
-`python -m evaluation.skills --changed-from HEAD~1 --gate --activate` locally, to
-publish it.
+skill is not served at all); run the workflow from the Actions tab to publish
+it. A manual run commits its activations to the branch it ran on, `main`
+included, and keeps the skills that passed even when another one failed.
+
+**Evidence (TASK-5.37).** An activation made in CI records the run under
+`metrics.ci` (run id and URL, workflow, commit). An activation made on a laptop
+or a `--baseline` pin carries none, and
+[`skills-check.yml`](../.github/workflows/skills-check.yml) fails `main` and pull
+requests until every pin has it, so a hand-edited manifest or snapshot cannot
+reach production unnoticed. A skill that cannot pass its gate is taken out with
+`--deactivate`: its pin is removed, so it is not served, and the reason is kept
+under `deactivated` in the manifest and shown in `docs/SKILLS.md`.
 
 ## Hot reload
 

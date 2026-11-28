@@ -14,7 +14,7 @@ vanilla Pd, so it rebuilt the effect from a feedback delay line. The audio at th
 bottom is the WAV that run produced.*
 
 Measured against the tuned RAG pipeline it replaced, on the same 30-question
-golden set, three trials per arm:
+golden set, three trials per arm ([EVAL_BASELINE.md](docs/EVAL_BASELINE.md)):
 
 | | Result |
 |---|---|
@@ -26,7 +26,8 @@ The loop does not buy answer quality; it buys the mechanism — re-searching,
 running tools, correcting itself. Where that pays off is measured, and where it
 still fails is written up in the [failure modes](docs/FAILURE_MODES.md).
 
-Numbers: [EVAL.md](docs/EVAL.md) · [PATCH_EVAL.md](docs/PATCH_EVAL.md) ·
+Numbers: [EVAL_BASELINE.md](docs/EVAL_BASELINE.md) (the multi-trial comparison) ·
+[EVAL.md](docs/EVAL.md) (the 1-trial sample on every push) · [PATCH_EVAL.md](docs/PATCH_EVAL.md) ·
 [FAILURE_MODES.md](docs/FAILURE_MODES.md)
 
 ## Sources
@@ -185,8 +186,13 @@ rather than the live classifier, so the gate measures the retriever instead of
 the router's run-to-run sampling; production routing is covered by the scope
 eval below.
 
-Current numbers are published in **[EVAL.md](docs/EVAL.md)**, updated on every push to
-`main` by a GitHub Actions workflow.
+Two reports are published. **[EVAL.md](docs/EVAL.md)** is rewritten on every push to
+`main` by a GitHub Actions workflow: full retrieval plus a 10-entry, 1-trial
+generation sample, enough to catch a regression but too few runs to compare the
+arms. **[EVAL_BASELINE.md](docs/EVAL_BASELINE.md)** is the 30-entry, 3-trial
+agent-vs-pipeline comparison quoted here; only a manual run of the workflow with
+3 or more trials rewrites it, and `tests/test_readme_eval.py` fails when the
+figures below no longer match it. Every table states its sample and trials.
 
 **Retrieval metrics**: recall@k, MRR, nDCG — with ablation against
 vector-only and BM25-only baselines to prove hybrid RRF wins. `--agent-retrieval`
@@ -203,16 +209,16 @@ the pipeline arm, whose thresholds are calibrated; agent scores are published
 beside it.
 
 ```bash
-# pipeline and agent on the same 10 entries, written to the published report
+# pipeline and agent on the same 10 entries, one trial (what a push publishes)
 python -m evaluation.evaluate --generation --mode both --sample 10 --report docs/EVAL.md
 
 # the published comparison: the full 30 entries, 3 trials per arm
 python -m evaluation.evaluate --all --mode both --agent-retrieval --sample 30 \
-  --trials 3 --report docs/EVAL.md
+  --trials 3 --report docs/EVAL_BASELINE.md
 ```
 
 **Measured** (2026-11-24, full 30 entries, both arms, 3 trials, recorded command
-above — the tables and the mean ± std are in [EVAL.md](docs/EVAL.md)):
+above — the tables and the mean ± std are in [EVAL_BASELINE.md](docs/EVAL_BASELINE.md)):
 
 | | Faithfulness | Relevance | Citation | Cost/query | p50 | p95 |
 |---|---|---|---|---|---|---|
@@ -539,6 +545,9 @@ PR:
 3. Runs `pytest tests/` with threshold assertions
 4. Publishes `docs/EVAL.md` to `main` (skips on PRs, and if the code on `main` changed during the run)
 
+A manual run with 3 or more trials writes and publishes `docs/EVAL_BASELINE.md`
+instead, so a push never overwrites the multi-trial baseline.
+
 Pushes to `main` that change only `backlog/` or Markdown files skip it.
 
 A second workflow
@@ -549,6 +558,20 @@ faithfulness/relevance thresholds and reporting the measured cost in the job
 summary. Both arms run so a change under `agent/` is measured by the arm it
 changes; the threshold check stays on the pipeline arm until the agent has its
 own calibrated baseline.
+
+Three more workflows cover the agent's execution path and its skills:
+
+- [`sandbox.yml`](.github/workflows/sandbox.yml) builds the pd-sandbox image and
+  runs every test that needs it (`pytest -m sandbox`, with `PD_SANDBOX_REQUIRED`
+  so a broken image fails instead of skipping) on changes to the agent, the
+  sandbox, the skills or the patch eval. No API calls.
+- [`patch-eval.yml`](.github/workflows/patch-eval.yml) runs the with-execution
+  patch eval on the same pull requests and fails below the floor in
+  `evaluation/gates.py` (about $0.08 a run; see [PATCH_EVAL.md](docs/PATCH_EVAL.md)).
+- [`skills-check.yml`](.github/workflows/skills-check.yml) fails `main` or a pull
+  request when `skills/activation.json` pins a version without evidence from a
+  [`skills.yml`](.github/workflows/skills.yml) gate run, or whose snapshot does
+  not match. No API calls.
 
 Requires `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY` set as [repository secrets](https://github.com/wilsontr/pd-chatbot/settings/secrets/actions).
 

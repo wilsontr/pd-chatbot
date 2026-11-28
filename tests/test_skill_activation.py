@@ -576,3 +576,145 @@ class TestCli:
         )
         assert "## Skills (eval-gated)" in report
         assert "| Skill | Activated version |" in report
+
+
+# --- CI evidence and the check on main (TASK-5.37) ---------------------------
+
+CI_ENV = {
+    "GITHUB_ACTIONS": "true",
+    "GITHUB_RUN_ID": "4242",
+    "GITHUB_SERVER_URL": "https://github.com",
+    "GITHUB_REPOSITORY": "owner/repo",
+    "GITHUB_WORKFLOW": skill_eval.GATE_WORKFLOW,
+    "GITHUB_EVENT_NAME": "workflow_dispatch",
+    "GITHUB_SHA": "abc123",
+}
+
+
+def _clear_ci(monkeypatch):
+    for key in CI_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+
+def _gated(root: Path, monkeypatch, name: str = NAME, *, ci: bool = True) -> None:
+    directory = root / name
+    skill = SkillRegistry(root, activation=False).get(name)
+    _clear_ci(monkeypatch)
+    if ci:
+        for key, value in CI_ENV.items():
+            monkeypatch.setenv(key, value)
+    skill_eval.activate_result(
+        {"skill": name, "version": skill.version, "digest": skill.digest,
+         "path": str(directory), "questions": 3, "judged": 3},
+        root=root, actor="tester",
+    )
+
+
+class TestCiEvidence:
+    def test_outside_ci_there_is_none(self):
+        assert skill_eval.ci_evidence({}) is None
+        assert skill_eval.ci_evidence({"GITHUB_ACTIONS": "true"}) is None
+
+    def test_in_ci_the_run_is_recorded(self, tmp_path, monkeypatch):
+        write_skill(tmp_path)
+        _gated(tmp_path, monkeypatch)
+        ci = load_manifest(tmp_path)[NAME].metrics["ci"]
+        assert ci == {
+            "run_id": "4242", "run_url": "https://github.com/owner/repo/actions/runs/4242",
+            "workflow": "Skill eval gate", "event": "workflow_dispatch", "commit": "abc123",
+        }
+        assert "[CI run](https://github.com/owner/repo/actions/runs/4242)" in (
+            skill_eval.render_report(root=tmp_path))
+
+    def test_the_gate_workflow_name_matches_skills_yml(self):
+        workflow = Path(__file__).parent.parent / ".github" / "workflows" / "skills.yml"
+        assert f"name: {skill_eval.GATE_WORKFLOW}\n" in workflow.read_text()
+
+
+class TestVerify:
+    def test_ci_gated_pins_pass(self, tmp_path, monkeypatch):
+        write_skill(tmp_path)
+        _gated(tmp_path, monkeypatch)
+        assert skill_eval.verify_manifest(tmp_path) == ([], [])
+        assert skill_eval.main(["--verify", "--skills-root", str(tmp_path)]) == 0
+
+    def test_a_baseline_pin_fails(self, tmp_path):
+        write_skill(tmp_path)
+        baseline(tmp_path)
+        failures, _ = skill_eval.verify_manifest(tmp_path)
+        assert failures == [f"{NAME} {load_manifest(tmp_path)[NAME].version}: "
+                            "pinned as an ungated baseline"]
+        assert skill_eval.main(["--verify", "--skills-root", str(tmp_path)]) == 1
+
+    def test_a_local_activation_fails(self, tmp_path, monkeypatch):
+        write_skill(tmp_path)
+        _gated(tmp_path, monkeypatch, ci=False)
+        failures, _ = skill_eval.verify_manifest(tmp_path)
+        assert len(failures) == 1 and "no CI-gated evidence (activated by tester)" in failures[0]
+
+    def test_evidence_from_another_workflow_fails(self, tmp_path, monkeypatch):
+        write_skill(tmp_path)
+        _gated(tmp_path, monkeypatch)
+        monkeypatch.setenv("GITHUB_WORKFLOW", "Evaluation")
+        write_skill(tmp_path, "other")
+        _gated_other = SkillRegistry(tmp_path, activation=False).get("other")
+        skill_eval.activate_result(
+            {"skill": "other", "version": _gated_other.version, "digest": _gated_other.digest,
+             "path": str(tmp_path / "other")}, root=tmp_path)
+        failures, _ = skill_eval.verify_manifest(tmp_path)
+        assert len(failures) == 1 and failures[0].startswith("other ")
+
+    def test_a_tampered_or_missing_snapshot_fails(self, tmp_path, monkeypatch):
+        write_skill(tmp_path)
+        _gated(tmp_path, monkeypatch)
+        entry = load_manifest(tmp_path)[NAME]
+        snap = snapshot_path(tmp_path, NAME, entry.digest)
+        (snap / "SKILL.md").write_text("edited by hand\n", encoding="utf-8")
+        failures, _ = skill_eval.verify_manifest(tmp_path)
+        assert failures == [f"{NAME} {entry.version}: snapshot does not match its pinned digest"]
+        import shutil
+        shutil.rmtree(snap)
+        failures, _ = skill_eval.verify_manifest(tmp_path)
+        assert failures and "is missing" in failures[0]
+
+    def test_an_ungated_working_edit_is_a_note_not_a_failure(self, tmp_path, monkeypatch):
+        directory = write_skill(tmp_path)
+        _gated(tmp_path, monkeypatch)
+        (directory / "SKILL.md").write_text(
+            (directory / "SKILL.md").read_text() + "More.\n", encoding="utf-8")
+        failures, notes = skill_eval.verify_manifest(tmp_path)
+        assert failures == [] and "snapshot serves" in notes[0]
+
+
+class TestDeactivate:
+    def test_deactivating_stops_serving_and_records_why(self, tmp_path, monkeypatch):
+        write_skill(tmp_path)
+        write_skill(tmp_path, "kept")
+        baseline(tmp_path)
+        _gated(tmp_path, monkeypatch, "kept")
+        _clear_ci(monkeypatch)
+        assert skill_eval.main([
+            "--deactivate", NAME, "--reason", "fails relevance", "--skills-root", str(tmp_path),
+        ]) == 0
+        assert set(load_manifest(tmp_path)) == {"kept"}
+        assert SkillRegistry(tmp_path).names() == ["kept"]
+        raw = json.loads(manifest_path(tmp_path).read_text())
+        assert raw["deactivated"][NAME]["reason"] == "fails relevance"
+        failures, notes = skill_eval.verify_manifest(tmp_path)
+        assert failures == [] and f"{NAME}: deactivated — fails relevance" in notes
+        report = skill_eval.render_report(root=tmp_path)
+        assert "## Deactivated" in report and "| deactivated |" in report
+
+    def test_a_reason_is_required(self, tmp_path):
+        write_skill(tmp_path)
+        baseline(tmp_path)
+        with pytest.raises(ActivationError):
+            skill_eval.deactivate(NAME, "  ", root=tmp_path)
+
+    def test_a_later_activation_clears_the_deactivation(self, tmp_path, monkeypatch):
+        write_skill(tmp_path)
+        baseline(tmp_path)
+        skill_eval.deactivate(NAME, "flaky", root=tmp_path)
+        _gated(tmp_path, monkeypatch)
+        assert "deactivated" not in json.loads(manifest_path(tmp_path).read_text())
+        assert skill_eval.verify_manifest(tmp_path) == ([], [])

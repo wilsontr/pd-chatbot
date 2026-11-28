@@ -74,13 +74,50 @@ SCOPE_ADHERENCE_THRESHOLD = 0.9
 # q_006 and q_007, so a 60% floor leaves a 1-entry judge-noise margin).
 # Each bound catches real regressions (task-failure spikes, runaway tool loops,
 # cost/latency blowups, or broken error recovery) without flaking CI.
-AGENT_THRESHOLDS: dict[str, float] = {
+#
+# These bounds are for the *docs* mode: documentation questions answered without
+# patch execution, which is what ``evaluation.evaluate --gate-agent`` measures
+# (evaluation/generation.py always answers with execution=False).
+AGENT_DOCS_THRESHOLDS: dict[str, float] = {
     "task_success_rate": 0.60,
     "max_avg_tool_calls": 3.5,
     "max_avg_cost_usd": 0.03,
     "max_p95_latency_ms": 20000.0,
     "recovery_rate": 0.50,
 }
+
+# Agent bounds for the *execution* mode (TASK-5.36): patch tasks answered with
+# run_patch / analyze_audio available, which is what ``evaluation.patch_eval
+# --arm with --gate`` measures. Calibrated against docs/PATCH_EVAL.md (16 tasks x 3
+# trials, with execution: pass 92%, by trial 81-100%, tool calls 6.3, p95 25.8 s,
+# cost/answer $0.0041). An answer that runs its patch, reads the analysis and
+# revises takes 2-3x the calls and time of a docs answer, so the docs bounds would
+# fail every healthy run. Task success here is the patch pass rate (runs without a
+# Pd error and meets its spec), not a judge score; its floor is
+# PATCH_EVAL_PASS_FLOOR below.
+PATCH_EVAL_PASS_FLOOR = 0.75
+AGENT_EXECUTION_THRESHOLDS: dict[str, float] = {
+    # The worst single trial so far was 13/16 (81%); one trial in CI, so the floor
+    # sits one task below that: 12/16.
+    "task_success_rate": PATCH_EVAL_PASS_FLOOR,
+    # 6.3 measured; a runaway repair loop shows up as well over 10.
+    "max_avg_tool_calls": 10.0,
+    # $0.0041 measured; p_14 alone has cost $0.0124 before its skill.
+    "max_avg_cost_usd": 0.03,
+    # 25.8 s measured over 48 answers, but 43.9 s in a 16-answer CI-shaped run
+    # (2026-11-28, local Docker): with one trial the p95 is the slowest answer,
+    # so the bound sits well above both.
+    "max_p95_latency_ms": 60000.0,
+    "recovery_rate": 0.50,
+}
+
+AGENT_THRESHOLDS_BY_MODE: dict[str, dict[str, float]] = {
+    "docs": AGENT_DOCS_THRESHOLDS,
+    "execution": AGENT_EXECUTION_THRESHOLDS,
+}
+
+#: The docs-mode bounds, under the name the generation eval has always used.
+AGENT_THRESHOLDS = AGENT_DOCS_THRESHOLDS
 
 # Minimum error-encountering tasks required before recovery_rate fails the gate.
 # A 10-entry CI run often has 0-1 tool errors; gating on n=1 would be noisy,

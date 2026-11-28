@@ -151,6 +151,27 @@ class TestMultiTrialReport:
         assert "±" not in report
         assert "trials per arm" not in report
 
+    def test_every_table_states_its_sample_and_trials(self):
+        """TASK-5.38: a reader can tell a 1-trial sample from the baseline."""
+        report = self._report(_aggregate_trials(_trials()))
+        assert f"**This report:** generation on {META['sample']} entries x 3 trials per arm" in report
+        assert "EVAL_BASELINE.md" not in report.split("## Dataset")[0]
+        assert "entries x 3 trials per arm.**" in report
+
+    def test_a_single_trial_report_points_at_the_baseline(self):
+        merged = _aggregate_trials(_trials()[:1])
+        report = _build_report(
+            {"generation": merged, "retrieval": {"hybrid_rrf": {"recall": {}}},
+             "scope": {}},
+            STATS,
+            generation_meta={**META, "trials": 1},
+        )
+        head = report.split("## Dataset")[0]
+        assert "x 1 trial per arm" in head and "[EVAL_BASELINE.md](EVAL_BASELINE.md)" in head
+        assert "1 trial per arm; cells are single-run means." in report
+        assert "x 1 trial per arm**: too few runs to call a difference" in report
+        assert f"All {STATS['total_entries']} entries, one run." in report
+
     def test_the_reading_says_matches_when_differences_are_within_noise(self):
         # Deltas +0.2, -0.1, +0.1: the mean difference is smaller than its own
         # spread, so no verdict beyond "matches" is supportable.

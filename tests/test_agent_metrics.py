@@ -392,7 +392,7 @@ class TestCliAndReportWiring:
         assert "Recovery" in report
         assert "50%" in report
         assert "n/a (0 errors)" in report
-        assert "Agent gate (CI `--gate-agent`)" in report
+        assert "Agent gate (CI `--gate-agent`, docs mode, no execution)" in report
         assert f"{AGENT_THRESHOLDS['task_success_rate']:.0%}" in report
 
     def test_cli_gate_agent_passes_when_metrics_meet_thresholds(

@@ -29,6 +29,18 @@ serving — that is how "the previous version stays live" is enforced.
 ``--baseline`` is the one path that activates without a measurement. It exists
 so the gate could be introduced without a paid run for every existing skill; CI
 never calls it, and the manifest records the versions as pre-gate.
+
+Evidence and the check on main (TASK-5.37). An activation made inside GitHub
+Actions records the run (``metrics.ci``: run id and URL, workflow, commit).
+``--verify`` reads the manifest, makes no API calls, and fails when a pinned
+version has no CI evidence (a baseline or a local activation) or its snapshot
+is missing or does not hash to the pinned digest. It runs on every push to main
+and on pull requests (``.github/workflows/skills-check.yml``). A skill that
+cannot pass its gate is taken out of service with ``--deactivate NAME --reason``,
+which removes its pin and records why::
+
+    python -m evaluation.skills --verify
+    python -m evaluation.skills --deactivate pd-flavors --reason "fails relevance"
 """
 
 from __future__ import annotations
@@ -57,9 +69,12 @@ from agent.skills import Skill, SkillRegistry
 from agent.skills.activation import (
     ActivationEntry,
     ActivationError,
+    load_deactivated,
     load_manifest,
     prune_snapshots,
     store_snapshot,
+    skill_digest,
+    snapshot_path,
     write_manifest,
 )
 from agent.skills.golden import read_golden_set
@@ -428,7 +443,9 @@ def activate_result(
         digest=digest,
         activated_at=activated_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         activated_by=actor or os.environ.get("GITHUB_ACTOR", "") or "local",
-        metrics=_metrics_record(result) | {"model": model, "judge_model": judge_model},
+        metrics=_metrics_record(result)
+        | {"model": model, "judge_model": judge_model}
+        | ({"ci": evidence} if (evidence := ci_evidence()) else {}),
     )
     write_manifest(root_path, entries)
     prune_snapshots(root_path, name)
@@ -437,6 +454,99 @@ def activate_result(
         "activated %s %s%s", name, version, "" if changed else " (version unchanged)"
     )
     return changed
+
+
+#: The workflow whose runs count as gate evidence (``name:`` in skills.yml).
+GATE_WORKFLOW = "Skill eval gate"
+
+
+def ci_evidence(env: Mapping[str, str] | None = None) -> dict[str, str] | None:
+    """The GitHub Actions run doing this activation, or None outside CI."""
+    env = os.environ if env is None else env
+    if env.get("GITHUB_ACTIONS") != "true" or not env.get("GITHUB_RUN_ID"):
+        return None
+    server = env.get("GITHUB_SERVER_URL", "https://github.com")
+    repo = env.get("GITHUB_REPOSITORY", "")
+    run_id = env["GITHUB_RUN_ID"]
+    return {
+        "run_id": run_id,
+        "run_url": f"{server}/{repo}/actions/runs/{run_id}",
+        "workflow": env.get("GITHUB_WORKFLOW", ""),
+        "event": env.get("GITHUB_EVENT_NAME", ""),
+        "commit": env.get("GITHUB_SHA", ""),
+    }
+
+
+def deactivate(
+    name: str,
+    reason: str,
+    *,
+    root: str | Path = SKILLS_ROOT,
+    actor: str = "",
+    deactivated_at: str | None = None,
+) -> None:
+    """Take a skill out of service: drop its pin and record why."""
+    if not reason.strip():
+        raise ActivationError("a deactivation needs a reason")
+    root_path = Path(root).expanduser()
+    entries = load_manifest(root_path) or {}
+    previous = entries.pop(name, None)
+    deactivated = load_deactivated(root_path)
+    deactivated[name] = {
+        "reason": reason.strip(),
+        "deactivated_at": deactivated_at
+        or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "deactivated_by": actor or os.environ.get("GITHUB_ACTOR", "") or "local",
+        "last_digest": previous.digest if previous else "",
+    }
+    write_manifest(root_path, entries, deactivated)
+
+
+def verify_manifest(root: str | Path = SKILLS_ROOT) -> tuple[list[str], list[str]]:
+    """Check every pin has CI-gated evidence and a matching snapshot.
+
+    Returns ``(failures, notes)``. Notes are not failures: a working folder that
+    differs from its pin serves the pinned snapshot until a gate activates it.
+    """
+    root_path = Path(root).expanduser()
+    entries = load_manifest(root_path)
+    if entries is None:
+        return [f"no {root_path.name}/activation.json"], []
+    failures: list[str] = []
+    notes: list[str] = []
+    for name, entry in sorted(entries.items()):
+        metrics = entry.metrics or {}
+        ci = metrics.get("ci") if isinstance(metrics.get("ci"), Mapping) else None
+        if metrics.get("baseline"):
+            failures.append(f"{name} {entry.version}: pinned as an ungated baseline")
+        elif not ci or not ci.get("run_id") or ci.get("workflow") != GATE_WORKFLOW:
+            failures.append(
+                f"{name} {entry.version}: no CI-gated evidence "
+                f"(activated by {entry.activated_by or 'unknown'})"
+            )
+        try:
+            snapshot = snapshot_path(root_path, name, entry.digest)
+        except ActivationError as exc:
+            failures.append(f"{name}: {exc}")
+            continue
+        if not snapshot.is_dir():
+            failures.append(f"{name} {entry.version}: snapshot {snapshot.name[:12]} is missing")
+        elif skill_digest(snapshot) != entry.digest:
+            failures.append(
+                f"{name} {entry.version}: snapshot does not match its pinned digest"
+            )
+        folder = root_path / name
+        if folder.is_dir() and skill_digest(folder) != entry.digest:
+            notes.append(
+                f"{name}: working folder differs from the pin; the snapshot serves "
+                "until the gate activates the new version"
+            )
+    for name, record in sorted(load_deactivated(root_path).items()):
+        if not str(record.get("reason") or "").strip():
+            failures.append(f"{name}: deactivated with no reason")
+        else:
+            notes.append(f"{name}: deactivated — {record['reason']}")
+    return failures, notes
 
 
 def activate_baseline(
@@ -541,7 +651,7 @@ def render_report(
             gate = "baseline (not measured)" if metrics.get("baseline") else "activated"
         else:
             metrics = {}
-            gate = "not activated"
+            gate = "deactivated" if name in load_deactivated(root_path) else "not activated"
         activated_version = entry.version if entry is not None else "—"
         lines.append(
             "| {name} | `{version}` | `{activated}` | {gate} | {faith} | {relevance} "
@@ -570,10 +680,23 @@ def render_report(
         f"- `{name}` at `{entry.version}`"
         + (f" — activated {entry.activated_at}" if entry.activated_at else "")
         + (f" by {entry.activated_by}" if entry.activated_by else "")
+        + (
+            f" ([CI run]({entry.metrics['ci']['run_url']}))"
+            if isinstance(entry.metrics.get("ci"), Mapping)
+            and entry.metrics["ci"].get("run_url")
+            else ""
+        )
         for name, entry in sorted(manifest.items())
     ]
     if activated_rows:
         lines += ["## Activated versions", "", *activated_rows, ""]
+    deactivated = load_deactivated(root_path)
+    if deactivated:
+        lines += ["## Deactivated", ""] + [
+            f"- `{name}` — {record.get('reason', '')}"
+            + (f" ({record['deactivated_at']})" if record.get("deactivated_at") else "")
+            for name, record in sorted(deactivated.items())
+        ] + [""]
     return "\n".join(lines)
 
 
@@ -682,10 +805,40 @@ def main(argv: list[str] | None = None) -> int:
                         help="Write the run's JSON results to this path")
     parser.add_argument("--summary", type=str, default=None,
                         help="Append a markdown job summary (e.g. $GITHUB_STEP_SUMMARY)")
+    parser.add_argument("--verify", action="store_true",
+                        help="Fail when a pinned version lacks CI-gated evidence or its "
+                             "snapshot does not match; no API calls (TASK-5.37)")
+    parser.add_argument("--deactivate", type=str, default=None, metavar="NAME",
+                        help="Stop serving a skill and record --reason in the manifest")
+    parser.add_argument("--reason", type=str, default="",
+                        help="Why the skill is deactivated (required with --deactivate)")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
     root = Path(args.skills_root).expanduser()
+
+    if args.verify:
+        failures, notes = verify_manifest(root)
+        for note in notes:
+            print(f"  note: {note}", file=sys.stderr)
+        if failures:
+            print("Skill activation check FAILED:", file=sys.stderr)
+            for failure in failures:
+                print(f"  - {failure}", file=sys.stderr)
+            return 1
+        print("Every pinned skill has CI-gated evidence and a matching snapshot.",
+              file=sys.stderr)
+        return 0
+
+    if args.deactivate:
+        try:
+            deactivate(args.deactivate, args.reason, root=root)
+        except ActivationError as exc:
+            parser.error(str(exc))
+        print(f"Deactivated {args.deactivate}: {args.reason}", file=sys.stderr)
+        if args.report:
+            Path(args.report).write_text(render_report(root=root), encoding="utf-8")
+        return 0
 
     if args.baseline:
         selected = _selected_skills(args) or None

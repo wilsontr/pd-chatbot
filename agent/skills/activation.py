@@ -150,14 +150,44 @@ def load_manifest(root: str | Path) -> dict[str, ActivationEntry] | None:
     return entries
 
 
-def write_manifest(root: str | Path, entries: Mapping[str, ActivationEntry]) -> Path:
-    """Write the manifest atomically, with skills in a stable order."""
+def load_deactivated(root: str | Path) -> dict[str, dict[str, Any]]:
+    """Skills taken out of service on purpose, with the recorded reason (TASK-5.37).
+
+    A deactivated skill has no entry under ``skills``, so it is not served; this
+    map only records why, so a reader can tell it from a skill never activated.
+    """
+    path = manifest_path(root)
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    value = raw.get("deactivated") if isinstance(raw, dict) else None
+    return {str(k): dict(v) for k, v in value.items()} if isinstance(value, dict) else {}
+
+
+def write_manifest(
+    root: str | Path,
+    entries: Mapping[str, ActivationEntry],
+    deactivated: Mapping[str, Mapping[str, Any]] | None = None,
+) -> Path:
+    """Write the manifest atomically, with skills in a stable order.
+
+    ``deactivated`` replaces the recorded deactivations; ``None`` keeps them,
+    except for a skill that ``entries`` now activates again.
+    """
     path = manifest_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    if deactivated is None:
+        deactivated = load_deactivated(root)
+    deactivated = {k: dict(v) for k, v in deactivated.items() if k not in entries}
+    payload: dict[str, Any] = {
         "version": MANIFEST_FORMAT_VERSION,
         "skills": {name: entries[name].to_dict() for name in sorted(entries)},
     }
+    if deactivated:
+        payload["deactivated"] = {name: deactivated[name] for name in sorted(deactivated)}
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
@@ -269,6 +299,7 @@ __all__ = [
     "activated_root",
     "activation_enabled_by_env",
     "iter_skill_files",
+    "load_deactivated",
     "load_manifest",
     "manifest_path",
     "prune_snapshots",

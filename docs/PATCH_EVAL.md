@@ -11,6 +11,37 @@ measured. Every spec is pinned by a correct patch and a near miss in
 python -m evaluation.patch_eval --trials 3 --report report.md --output results.json
 ```
 
+## In CI (TASK-5.36)
+
+[`patch-eval.yml`](../.github/workflows/patch-eval.yml) runs the with-execution
+arm on every pull request that touches the agent, the sandbox, the skills or this
+eval. It builds the sandbox image, runs the 16 tasks once, and fails when the
+gate in [`evaluation/gates.py`](../evaluation/gates.py) is breached. The agent's
+bounds depend on whether it can run patches, so the gate keeps one set per mode:
+
+| Bound | Docs mode (`evaluate --gate-agent`) | Execution mode (`patch_eval --gate`) |
+|---|---|---|
+| Task success | judged >= 60% | patch passes >= 75% (`PATCH_EVAL_PASS_FLOOR`) |
+| Tool calls per answer | <= 3.5 | <= 10 |
+| Cost per answer | <= $0.03 | <= $0.03 |
+| p95 latency | <= 20 s | <= 60 s |
+| Recovery rate (2+ error tasks) | >= 50% | >= 50% |
+
+The execution bounds come from the table below: 92% pass, 81% in the worst trial
+(so 12/16 for one trial), 6.3 tool calls and a 25.8 s p95. One run of the CI
+command (16 x 1, 2026-11-28) passed 16/16 with 7.1 tool calls, a 43.9 s p95 and
+$0.0847 in all; with one trial the p95 is the slowest answer, hence 60 s. The docs bounds would
+fail every healthy execution run. A run where more than a quarter of the answers
+hit infrastructure errors fails as unmeasured rather than passing on what is left.
+
+Cost: 16 answers at about $0.0041, so roughly **$0.07-0.09 a run** ($0.0847 measured), with no judge
+calls. The step summary states the measured dollars. To run more trials, use
+the workflow's manual dispatch.
+
+```bash
+python -m evaluation.patch_eval --arm with --gate --summary summary.md
+```
+
 | | Without execution | With execution |
 |---|---|---|
 | Answers | 48 | 48 |

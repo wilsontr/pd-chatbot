@@ -13,8 +13,10 @@ on:
         description: 'Number of generation samples'
         type: string
         default: '10'
+      # 3 or more trials writes docs/EVAL_BASELINE.md, the agent-vs-pipeline
+      # baseline the README cites (TASK-5.38); fewer writes the routine EVAL.md.
       trials:
-        description: 'Trials per arm (3 = the published 30-entry baseline; each trial costs money)'
+        description: 'Trials per arm (3+ with sample 30 = a new published baseline, EVAL_BASELINE.md; each trial costs money)'
         type: string
         default: '1'
 
@@ -66,6 +68,22 @@ jobs:
       # main / manual: retrieval plus a cost-bounded generation sample, so the
       # published report carries current generation numbers and a regression on
       # main fails the build instead of silently degrading answers.
+      # A routine run (push, or dispatch with 1-2 trials) rewrites docs/EVAL.md;
+      # only a dispatch with 3+ trials rewrites the baseline. A push can never
+      # overwrite the baseline the README cites.
+      - name: Choose the report
+        id: report
+        env:
+          TRIALS: ${{ github.event.inputs.trials || '1' }}
+        run: |
+          if [[ "$TRIALS" -ge 3 ]]; then
+            echo "path=docs/EVAL_BASELINE.md" >> "$GITHUB_OUTPUT"
+            echo "baseline=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=docs/EVAL.md" >> "$GITHUB_OUTPUT"
+            echo "baseline=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run full evaluation (retrieval + sampled generation)
         if: github.event_name != 'pull_request'
         env:
@@ -80,7 +98,7 @@ jobs:
             --agent-retrieval \
             --sample "$SAMPLE" \
             --trials "$TRIALS" \
-            --report docs/EVAL.md \
+            --report "${{ steps.report.outputs.path }}" \
             --gate \
             --gate-agent \
             --summary "$GITHUB_STEP_SUMMARY" \
@@ -91,14 +109,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends puredata-core
 
+      # A new baseline changes the figures the README quotes, so the README check
+      # is left to the next push; that push fails until the README is updated.
       - name: Run pytest (threshold assertions)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          BASELINE_RUN: ${{ steps.report.outputs.baseline }}
         run: |
-          pytest tests/ -v
+          if [[ "$BASELINE_RUN" == "true" ]]; then
+            pytest tests/ -v --deselect tests/test_readme_eval.py
+          else
+            pytest tests/ -v
+          fi
 
       # Last, so a problem publishing cannot hide a test result.
-      - name: Publish EVAL.md
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: .github/scripts/publish_eval.sh
+      - name: Publish the report
+        if: >-
+          github.ref == 'refs/heads/main' && (github.event_name == 'push'
+          || (github.event_name == 'workflow_dispatch' && steps.report.outputs.baseline == 'true'))
+        run: .github/scripts/publish_eval.sh "${{ steps.report.outputs.path }}"

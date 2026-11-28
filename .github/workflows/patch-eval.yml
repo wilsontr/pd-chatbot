@@ -1,0 +1,84 @@
+name: Patch eval gate
+
+# Measures the execution-enabled agent (TASK-5.36): every task in
+# evaluation/patch_tasks.json is answered with run_patch / analyze_audio
+# available, the final patches are run in the pd-sandbox image, and the job
+# fails when the with-execution pass rate falls below PATCH_EVAL_PASS_FLOOR or
+# the run breaches the execution-mode agent bounds (AGENT_EXECUTION_THRESHOLDS),
+# both in evaluation/gates.py. The docs-mode bounds in the same file gate the
+# generation eval (eval.yml, generation-eval.yml), which never executes patches.
+#
+# Cost per run: 16 answers (one trial, with-execution arm only), no judge calls.
+# Measured $0.0847 for one 16-answer run (2026-11-28), so about $0.07-0.09 a run plus
+# a few Voyage query embeddings. The step summary states the measured dollars.
+# Pass `trials` for a tighter estimate; each trial adds the same again.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'sandbox/**'
+      - 'skills/**'
+      - 'rag.py'
+      - 'evaluation/patch_eval.py'
+      - 'evaluation/patch_tasks.json'
+      - 'evaluation/gates.py'
+      - '.github/workflows/patch-eval.yml'
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: 'Trials of the with-execution arm (each costs about $0.07)'
+        type: string
+        default: '1'
+
+concurrency:
+  group: patch-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  patch-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build the sandbox image
+        run: docker build -t pd-sandbox sandbox/
+
+      - name: Build ChromaDB index (embeddings must be precomputed)
+        env:
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: python embed_and_index.py
+
+      - name: Run the with-execution patch eval (gated)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          PD_SANDBOX_BACKEND: docker
+          TRIALS: ${{ github.event.inputs.trials || '1' }}
+        run: |
+          python -m evaluation.patch_eval \
+            --arm with \
+            --trials "$TRIALS" \
+            --gate \
+            --output patch_eval.json \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the per-task results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-eval
+          path: patch_eval.json
+          if-no-files-found: ignore

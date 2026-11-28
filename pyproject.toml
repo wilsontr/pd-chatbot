@@ -36,4 +36,5 @@ dependencies = { file = ["requirements.txt"] }
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests that require API calls (deselect with '-m \"not slow\"')",
+    "sandbox: runs patches in the pd-sandbox image; apply with tests.needs_sandbox (TASK-5.35)",
 ]

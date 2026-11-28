@@ -7,6 +7,10 @@ whether the agent could run its patches while answering::
 
     python -m evaluation.patch_eval --trials 3 --report report.md --output results.json
 
+CI runs the with-execution arm once and gates it (TASK-5.36)::
+
+    python -m evaluation.patch_eval --arm with --gate --summary "$GITHUB_STEP_SUMMARY"
+
 No LLM judges the result. A task passes when any patch in the answer runs without
 a Pd error and meets every check in the spec.
 """
@@ -28,6 +32,11 @@ from typing import Any, Mapping
 import numpy as np
 
 import pricing
+from evaluation.gates import (
+    AGENT_EXECUTION_THRESHOLDS,
+    check_agent_thresholds,
+    format_agent_thresholds,
+)
 from agent.audio import analyze, read_wav
 from agent.tools.patch import clean_console, console_errors, parse_inputs, runnable_file
 from evaluation.retry import _is_retryable
@@ -344,6 +353,64 @@ def to_markdown(summary: dict[str, Any], rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+#: Above this share of answers lost to outages, a run says nothing about patches.
+MAX_INFRASTRUCTURE_ERROR_SHARE = 0.25
+
+
+def as_agent_summary(arm: Mapping[str, Any]) -> dict[str, Any]:
+    """One arm's summary under the metric names the agent gate reads."""
+    return {
+        "mode": "agent",
+        "n": arm["n"],
+        "task_success_rate": arm["passed"],
+        "avg_tool_calls": arm["tool_calls"],
+        "avg_cost_usd": arm["cost_usd"],
+        "p95_latency_ms": arm["latency_p95_s"] * 1000,
+        "tasks_with_errors": arm.get("tasks_with_errors", 0),
+        "tasks_recovered": arm.get("tasks_recovered", 0),
+    }
+
+
+def check_gate(
+    summary: Mapping[str, Any], thresholds: Mapping[str, float] = AGENT_EXECUTION_THRESHOLDS
+) -> list[str]:
+    """Failures of the with-execution arm against the execution-mode agent gate."""
+    arm = summary.get("with")
+    if not arm:
+        return ["no with-execution answers were scored"]
+    lost = arm["infrastructure_errors"]
+    if lost > MAX_INFRASTRUCTURE_ERROR_SHARE * (lost + arm["n"]):
+        return [f"{lost} of {lost + arm['n']} answers failed on infrastructure errors"]
+    return check_agent_thresholds(
+        {"per_model": {"with execution (agent)": as_agent_summary(arm)}}, thresholds
+    )
+
+
+def run_cost(rows: list[dict[str, Any]]) -> float:
+    return sum(r.get("cost_usd") or 0.0 for r in rows)
+
+
+def gate_summary(
+    summary: Mapping[str, Any], rows: list[dict[str, Any]], failures: list[str], model: str
+) -> str:
+    trials = len({r["trial"] for r in rows})
+    tasks = len({r["id"] for r in rows})
+    verdict = "passed" if not failures else "**failed**"
+    lines = [
+        "## Patch eval (with execution)",
+        "",
+        f"{tasks} tasks x {trials} trial(s), `{model}`, sandbox-scored; "
+        f"measured cost ${run_cost(rows):.4f}.",
+        "",
+        f"Gate {verdict}: {format_agent_thresholds(AGENT_EXECUTION_THRESHOLDS)}.",
+        "",
+        *[f"- {f}" for f in failures],
+        "",
+        to_markdown(summary, rows),
+    ]
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--arm", choices=(*ARMS, "both"), default="both")
@@ -353,6 +420,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--gate", action="store_true",
+        help="Exit 1 when the with-execution arm breaches the execution-mode agent gate")
+    parser.add_argument("--summary", type=Path, help="Append a Markdown summary (CI step summary)")
     args = parser.parse_args()
     # Scoring needs a sandbox in both arms.
     os.environ.setdefault("PD_SANDBOX_BACKEND", "docker")
@@ -367,6 +438,15 @@ def main() -> None:
         args.report.write_text(report)
     if args.output:
         args.output.write_text(json.dumps({"summary": summary, "rows": rows}, indent=1))
+    failures = check_gate(summary) if args.gate else []
+    if args.summary:
+        with args.summary.open("a") as fh:
+            fh.write(gate_summary(summary, rows, failures, args.model) + "\n")
+    if failures:
+        print("Patch eval gate failed:\n" + "\n".join(f"  - {f}" for f in failures))
+        raise SystemExit(1)
+    if args.gate:
+        print(f"Patch eval gate passed ({format_agent_thresholds(AGENT_EXECUTION_THRESHOLDS)})")
 
 
 if __name__ == "__main__":
