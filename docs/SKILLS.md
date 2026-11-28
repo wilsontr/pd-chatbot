@@ -8,18 +8,18 @@ Thresholds: faithfulness >= 4, relevance >= 4.5, citation_correctness >= 4, load
 
 | Skill | Version | Activated | Gate | Faithfulness | Relevance | Citation | Task success | Loaded |
 |---|---|---|---|---|---|---|---|---|
-| abstractions-and-dollar-zero | `c4129daebf7b` | `5433fba8eed4` | baseline (not measured) | — | — | — | — | — |
+| abstractions-and-dollar-zero | `599b049b2849` | `599b049b2849` | pass | 4.69 | 4.84 | 4.09 | 76% | 78% |
 | dsp-debugging | `3a9b2c0cd8c2` | `b10d1256e39a` | baseline (not measured) | — | — | — | — | — |
 | granular-synthesis | `fc0f3280f4ac` | `41e503ae5451` | baseline (not measured) | — | — | — | — | — |
 | pd-flavors | `337f1d11b579` | `dfec472f9f1c` | activated | 5.00 | 4.50 | 4.50 | 60% | 100% |
 | wavetables | `42a363f92b14` | `0cf6f136b95d` | activated | 4.25 | 5.00 | 4.25 | 100% | 75% |
-| working-from-a-pd-file | `e891cc2f61f6` | `e891cc2f61f6` | pass | 4.50 | 4.90 | 4.50 | 69% | 64% |
+| working-from-a-pd-file | `e891cc2f61f6` | `e891cc2f61f6` | activated | 4.50 | 4.90 | 4.50 | 69% | 64% |
 
 Per-question results, including the judge's explanations and any claim checks, are in the run's JSON output (`--output`) and the CI job summary. The generation and retrieval eval report is in [EVAL.md](EVAL.md).
 
 ## Activated versions
 
-- `abstractions-and-dollar-zero` at `5433fba8eed4` — activated 2026-11-26T00:15:28Z by baseline
+- `abstractions-and-dollar-zero` at `599b049b2849` — activated 2026-11-28T05:24:30Z by wilsontr ([CI run](https://github.com/wilsontr/pd-chatbot/actions/runs/46111406363))
 - `dsp-debugging` at `b10d1256e39a` — activated 2026-11-26T00:15:28Z by baseline
 - `granular-synthesis` at `41e503ae5451` — activated 2026-11-26T00:15:28Z by baseline
 - `pd-flavors` at `dfec472f9f1c` — activated 2026-11-28T01:33:49Z by wilsontr ([CI run](https://github.com/wilsontr/pd-chatbot/actions/runs/46093371333))

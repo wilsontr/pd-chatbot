@@ -1,0 +1,104 @@
+{
+  "skill": "abstractions-and-dollar-zero",
+  "questions": [
+    {
+      "id": "abs-001",
+      "question": "Two copies of my abstraction share the same [receive] value. How do I make them independent?",
+      "expects": [
+        "$0"
+      ],
+      "notes": "Explains the per-patch $0 counter and the documented local-name pattern: $0-prefixed send/receive pairs, array names, value names and text names so instances do not collide. Should mention that the prefix must be on both ends."
+    },
+    {
+      "id": "abs-002",
+      "question": "Why is $1 undefined in my top-level patch but works inside my abstraction?",
+      "notes": "Explains the documented difference: object boxes expand $ at creation time from the abstraction's arguments, message boxes at message time from the incoming list, and $ variables are undefined in a new or opened document. Should not suggest a workaround that contradicts that timing."
+    },
+    {
+      "id": "abs-003",
+      "question": "What is the difference between a one-off [pd my-subpatch] and an abstraction?",
+      "expects": [
+        "abstraction"
+      ],
+      "notes": "Contrasts the two documented kinds: a one-off subpatch's contents are saved inside the parent file and copies can be edited individually; an abstraction is a separate patch file invoked by name, shared by its instances. Should mention the practical editing consequence."
+    },
+    {
+      "id": "abs-004",
+      "question": "How do I accept a variable number of arguments in an abstraction?",
+      "expects": [
+        "pdcontrol"
+      ],
+      "notes": "Points at pdcontrol's args message, which returns all of the patch's arguments as a list and keeps atom types, versus fixed $1/$2 substitution. May also mention nesting abstractions for staged substitution."
+    },
+    {
+      "id": "abs-005",
+      "question": "How do I use $0 in the receive or send name of an IEMgui?",
+      "notes": "Recalls the documented escaping rule: IEMgui send/receive names are set by message, so $0 has to be escaped with a backslash to be stored literally. Should not present the literal name as automatically expanded."
+    },
+    {
+      "id": "abs-006",
+      "question": "I used [array define buffer] inside an abstraction and now all my instances read and write the same array. How do I give each instance its own?",
+      "expects": [
+        "$0"
+      ],
+      "notes": "Explains $0 as a per-patch counter and names the array $0-buffer (or similar), noting that every reader and writer inside the abstraction must use the same $0- name; cites the Dollar signs section."
+    },
+    {
+      "id": "abs-007",
+      "question": "Inside my abstraction a message box [set $1( always sends 0 instead of the argument I typed after the abstraction name. Why?",
+      "notes": "Distinguishes creation-time expansion in object boxes from message-time expansion in message boxes; a message box's $1 comes from the incoming message, so the argument has to pass through an object box such as [f $1] first."
+    },
+    {
+      "id": "abs-008",
+      "question": "How do I make an abstraction with two signal inlets and one control inlet, in a particular order on the box?",
+      "expects": [
+        "inlet~"
+      ],
+      "notes": "Uses [inlet~] for signals and [inlet] for control, and states that the box's inlets follow the left-to-right horizontal position of the inlet objects inside the abstraction (Subpatches 2.8)."
+    },
+    {
+      "id": "abs-009",
+      "question": "How do I run 8 copies of the same voice abstraction and tell each one which voice number it is?",
+      "expects": [
+        "clone"
+      ],
+      "notes": "Recommends [clone] with the abstraction name and count; inside each copy $1 is the instance number (from 0 unless -s changes the start), extra arguments shift to $2 onward; does not invent clone options."
+    },
+    {
+      "id": "abs-010",
+      "question": "I edited my abstraction file and saved it, but the copies already open in my main patch still behave the old way. Is that expected?",
+      "notes": "Grounds the answer in how abstractions are separate files loaded at creation: the excerpt on editing abstractions says what updates; avoids claiming behaviour the docs do not state and suggests re-creating or reopening as a check."
+    },
+    {
+      "id": "abs-011",
+      "question": "What's the difference between [send foo] and [send $0-foo] in a patch I only open once?",
+      "expects": [
+        "$0"
+      ],
+      "notes": "Explains that in a single top-level patch both work, but $0-foo is local to that patch (and its one-off subpatches) while foo is global, so another patch or abstraction instance using foo would collide; cites Dollar signs."
+    },
+    {
+      "id": "abs-012",
+      "question": "My abstraction isn't found when I type its name in a new patch — Pd says it couldn't create it. What do I check?",
+      "notes": "Says an abstraction is a separate .pd file that must be on Pd's search path or in the same directory as the patch using it; suggests checking the file name and the path settings; does not invent menu names beyond the docs."
+    },
+    {
+      "id": "abs-013",
+      "question": "How do I show a slider from inside a subpatch on the parent patch's box?",
+      "expects": [
+        "parent"
+      ],
+      "notes": "Describes graph-on-parent (2.8.2): enable it in the subpatch's properties, only GUI controls inside the visible area appear on the parent box; editing still happens inside the subpatch."
+    },
+    {
+      "id": "abs-014",
+      "question": "Can I build a name like \"$0-$1-env\" so each abstraction has a per-instance and per-argument local name?",
+      "notes": "Explains $ concatenation in object boxes ($0-$1-env expands at creation time), and that combining $0 with an argument gives names unique per instance and per argument; flags anything beyond the documented concatenation as a suggestion."
+    },
+    {
+      "id": "abs-015",
+      "question": "I have a one-off [pd filter] subpatch copied three times. If I change one, do the others change?",
+      "notes": "One-off subpatches are saved inside the parent and each copy is edited independently, so the others do not change; an abstraction is the way to share edits (Subpatches 2.8 vs 2.8.1)."
+    }
+  ]
+}

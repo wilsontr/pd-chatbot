@@ -2,13 +2,31 @@
   "version": 1,
   "skills": {
     "abstractions-and-dollar-zero": {
-      "version": "5433fba8eed4",
-      "digest": "5433fba8eed4f446e508d80d2fd4470562bce4ee59f6f2532fd34cfe0c742aec",
-      "activated_at": "2026-11-26T00:15:28Z",
-      "activated_by": "baseline",
+      "version": "599b049b2849",
+      "digest": "599b049b2849141ce8af58d39fa528fe9eff3a17d4d8d3f80e29c27360599575",
+      "activated_at": "2026-11-28T05:24:30Z",
+      "activated_by": "wilsontr",
       "metrics": {
-        "baseline": true,
-        "reason": "TASK-5.15 pre-gate baseline"
+        "questions": 15,
+        "trials": 3,
+        "answers": 45,
+        "judged": 45,
+        "task_success_rate": 0.7556,
+        "load_rate": 0.7778,
+        "faithfulness_mean": 4.69,
+        "relevance_mean": 4.84,
+        "citation_correctness_mean": 4.09,
+        "avg_cost_usd": 0.001493,
+        "avg_latency_ms": 5637.4,
+        "model": "claude-haiku-5-5",
+        "judge_model": "claude-haiku-4-5",
+        "ci": {
+          "run_id": "46111406363",
+          "run_url": "https://github.com/wilsontr/pd-chatbot/actions/runs/46111406363",
+          "workflow": "Skill eval gate",
+          "event": "workflow_dispatch",
+          "commit": "be6922f6e130853ab40e17cb4bae0303b9e673cd"
+        }
       }
     },
     "dsp-debugging": {
