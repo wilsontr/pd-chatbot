@@ -1,6 +1,6 @@
 ---
 name: abstractions-and-dollar-zero
-description: Abstractions, subpatches, creation arguments and $0-local names in Pd — passing arguments, local send/receive pairs, arrays and value/text names.
+description: Use for any question about Pd abstractions or subpatches — a reusable .pd file used as an object, a one-off [pd name] subpatch, creation arguments ($1, $2), $0 local names so copies do not share a send/receive, array, [value] or [text], [clone], [pdcontrol] args, graph-on-parent, editing an abstraction that is in use, or an abstraction Pd cannot find.
 ---
 
 # Abstractions and `$0` scoping in Pd
@@ -15,8 +15,9 @@ first one's value". Search the docs before answering; this file is a procedure.
 - **Two kinds of subpatch.** `[pd]` or `[pd name]` creates a *one-off subpatch*:
   its contents are saved inside the parent patch, and copies can be edited
   individually. An *abstraction* is a separate `something.pd` file invoked as
-  `[something]`; every instance shares the file, and a saved edit affects
-  instances created afterwards (Subpatches, 2.8 and 2.8.1).
+  `[something]`; every instance shares the file, so a saved edit reaches every
+  invocation — the manual's wording is "as they are created" (2.8.1). Quote the
+  excerpt you have on timing rather than asserting it yourself.
 - **Inlets and outlets.** `[inlet]`, `[outlet]`, `[inlet~]` and `[outlet~]`
   inside the subpatch create the box's inlets and outlets, in left-to-right
   order, for both kinds of subpatch. Control inlets/outlets carry messages;
@@ -43,6 +44,27 @@ first one's value". Search the docs before answering; this file is a procedure.
 - **Graph on parent** shows a subpatch's controls on the parent box (2.8.2);
   only controls become visible, and you open the subpatch with right-click →
   Open.
+
+## Where the docs say it
+
+Cite the excerpt that states each point, and nothing that `search_docs` did not
+return. These are the sections that carry this topic:
+
+- **Dollar signs (2.7.6)** — `$0`, `$1`, creation- vs message-time expansion,
+  concatenation such as `$0-$1-env`, local array / `[value]` / `[text]` names.
+- **Subpatches (2.8)** — one-off `[pd name]` subpatches and `[inlet]`/`[outlet]`
+  ordering; **Abstractions (2.8.1)**; **Graph on parent (2.8.2)**.
+- **Editing an abstraction in use.** The manual says that changing and saving
+  an abstraction affects its invocations "as they are created". Quote that and
+  stop there: do not claim that open instances update, or that they never do,
+  beyond what the excerpt says. Suggest re-creating the instance as a check.
+- **An abstraction Pd cannot find.** Section 3.4 (Path and startup) says the
+  search paths are used to load externals *and abstractions*; section 4.4.2
+  covers `[declare -path]` for one patch. Cite those, not the build-from-source
+  chapters, and do not invent console messages or command-line flags.
+- **Object pages** — `[clone]` (copies of an abstraction, instance numbers) and
+  `[pdcontrol]` (the `args` message) on the IEM object reference: search with
+  `object_names` and cite the page it returns.
 
 ## Procedure for writing or fixing one
 
@@ -72,8 +94,8 @@ first one's value". Search the docs before answering; this file is a procedure.
   the main patch where creation arguments do not exist.
 - Two copies sharing `[send foo]`/`[receive foo]`, an array name, or a `[value]`
   name — the fix is `$0` on both ends.
-- Editing a one-off subpatch expecting other copies to change, or editing an
-  abstraction expecting already-open instances to update.
+- Editing a one-off subpatch expecting other copies to change (they are
+  separate copies; an abstraction is the way to share an edit).
 - Forgetting that a one-off subpatch lives in the parent file, while an
   abstraction is a separate file that has to be findable on Pd's path.
 - Using `$0` in an IEMgui message without escaping it.

@@ -1,9 +1,11 @@
 ---
 id: TASK-5.42
 title: Make abstractions-and-dollar-zero load reliably and fix its weak answers
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-11-28 02:48'
+updated_date: '2026-11-28 05:17'
 labels:
   - agent
   - skills
@@ -25,3 +27,19 @@ Load rate 44% in CI run 46095333752 (floor 50%); six questions loaded 0/3 or 1/3
 - [ ] #2 abs-010 and abs-012 answers cite excerpts that support them, or the skill says the docs do not cover the point
 - [ ] #3 The skill passes the CI gate and its activation carries CI evidence
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Rewrite the description as a trigger listing the user situations it covers.
+2. Add a 'Where the docs say it' section mapping each point to the excerpt that supports it (2.7.6, 2.8, 2.8.1, 2.8.2, 3.4, 4.4.2, clone and pdcontrol pages).
+3. Remove the skill's own unsupported claim about open instances not updating.
+4. Measure load rate and false triggers locally, then gate in CI.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Judge reasons (CI run 46095333752): abs-010 and abs-012 cited sections or URLs that did not support them (6.5 building-from-source for a path problem); abs-010 answers also contradicted the docs on whether open instances update, which the skill itself asserted in two places. Manual 2.8.1 says saved changes 'affect all invocations of it as they are created'; 3.4 says the search paths load externals and abstractions; [pdcontrol] (args) and [clone] pages are indexed.
+Local, 15 x 2: load rate old description 43%, new 60%; false triggers on 18 questions from other skills 0/18. Judged 15 x 2 with the new description and anchors: faithfulness 4.47, relevance 4.80, citation 4.20, load 67% (abs-010 and abs-012 still citation 2-3, hence step 3).
+<!-- SECTION:NOTES:END -->
